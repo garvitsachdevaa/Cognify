@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     # LLM
     gemini_api_key: str = ""
+    hf_token: str = ""  # HuggingFace token for Aryabhata-1.0
 
     # Vector DB
     pinecone_api_key: str = ""

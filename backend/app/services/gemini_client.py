@@ -77,11 +77,16 @@ Do not include any explanation, only the JSON."""
         response = model.generate_content(prompt)
         raw = response.text.strip()
         # Strip markdown code fences if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        return json.loads(raw.strip())
+        if "```" in raw:
+            parts = raw.split("```")
+            raw = parts[1].strip()
+            if raw.lower().startswith("json"):
+                raw = raw[4:].strip()
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start != -1 and end > start:
+            raw = raw[start:end]
+        return json.loads(raw)
     except Exception as e:
         print(f"[Gemini] classify_question error: {e}")
         return {"subtopics": ["unknown"], "difficulty": 3}
@@ -143,11 +148,20 @@ Be precise. Each step must be clear and numbered."""
         model = _get_model()
         response = model.generate_content(prompt)
         raw = response.text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        return json.loads(raw.strip())
+        # Strip markdown code fences if present
+        if "```" in raw:
+            # Extract content between first ``` and last ```
+            parts = raw.split("```")
+            # parts[1] is content inside the first pair of fences
+            raw = parts[1].strip()
+            if raw.lower().startswith("json"):
+                raw = raw[4:].strip()
+        # Find JSON object boundaries as fallback
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start != -1 and end > start:
+            raw = raw[start:end]
+        return json.loads(raw)
     except Exception as e:
         print(f"[Gemini] solve_doubt error: {e}")
         return {

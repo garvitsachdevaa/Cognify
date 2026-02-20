@@ -1,6 +1,7 @@
 """
 Doubt router — step-by-step solution with sympy verification.
-  POST /doubt  → Gemini solves, sympy verifies final answer
+  POST /doubt        → Gemini solves, sympy verifies
+  POST /doubt/solve  → same (alias for frontend)
 """
 
 from fastapi import APIRouter

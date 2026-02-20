@@ -74,6 +74,15 @@ export default function DoubtChat({ userId }: Props) {
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-gray-200">Step-by-step solution</h3>
               <div className="flex items-center gap-1.5">
+                {result.model_used === "aryabhata-1.0" ? (
+                  <span className="badge bg-orange-900/60 text-orange-300 border border-orange-700/50 text-xs">
+                    ⚡ Aryabhata 1.0
+                  </span>
+                ) : (
+                  <span className="badge bg-blue-900/60 text-blue-300 border border-blue-700/50 text-xs">
+                    ✦ Gemini
+                  </span>
+                )}
                 {result.sympy_verified ? (
                   <span className="badge bg-emerald-900/60 text-emerald-300 border border-emerald-700/50">
                     ✓ Verified

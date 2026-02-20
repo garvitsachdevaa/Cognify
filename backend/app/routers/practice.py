@@ -42,6 +42,32 @@ class AnswerRequest(BaseModel):
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+_QUESTION_STARTERS = (
+    "find", "evaluate", "calculate", "compute", "prove", "show", "determine",
+    "if ", "let ", "for ", "given", "solve", "integrate", "differentiate",
+    "a ", "the ", "which", "what", "how", "when", "using", "without",
+)
+
+def _is_valid_question(text: str) -> bool:
+    """Return True if text looks like a real JEE math question (not scraped article text)."""
+    t = text.strip()
+    if not t or len(t) < 10:
+        return False
+    # Reject obviously long article text (real questions are usually < 350 chars)
+    if len(t) > 400:
+        return False
+    t_lower = t.lower()
+    # Accept if it ends with "?" or starts with a known question word
+    if t.endswith("?"):
+        return True
+    if any(t_lower.startswith(s) for s in _QUESTION_STARTERS):
+        return True
+    # Accept if it contains LaTeX-style math markers
+    if any(marker in t for marker in ["∫", "∑", "∏", "√", "²", "³", "^", "dx", "dy"]):
+        return True
+    return False
+
+
 def _ensure_concept(db: Session, concept_name: str) -> int:
     """Get or create the concept in DB, using graph metadata for display info."""
     graph = load_graph()
@@ -115,7 +141,7 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
                     text_hash=ph["text_hash"],
                     embedding_id=ph.get("question_id", ""),
                 )
-                if db_id not in seen_ids:
+                if db_id not in seen_ids and _is_valid_question(ph["text"]):
                     questions.append({
                         "id": db_id,
                         "text": ph["text"],
@@ -142,7 +168,7 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
                     text_hash=q["text_hash"],
                     embedding_id=q.get("question_id", ""),
                 )
-                if db_id not in seen_ids:
+                if db_id not in seen_ids and _is_valid_question(q["text"]):
                     questions.append({
                         "id": db_id,
                         "text": q["text"],

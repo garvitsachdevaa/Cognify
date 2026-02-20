@@ -93,6 +93,7 @@ export interface DoubtResponse {
   final_answer: string;
   sympy_verified: boolean;
   sympy_error: string | null;
+  model_used?: string;  // "aryabhata-1.0" or "gemini"
 }
 
 export function solveDoubt(user_id: number, question_text: string) {
