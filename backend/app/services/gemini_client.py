@@ -2,7 +2,7 @@
 Google Gemini client.
 
 Free tier (as of 2025):
-  - gemini-1.5-flash : 1M tokens/day, 15 RPM
+  - gemini-2.0-flash : 1500 RPD, 15 RPM free tier (AI Studio key required)
   - text-embedding-004: free with quota
 
 Used for:
@@ -20,7 +20,7 @@ from app.config import settings
 
 # Lazy initialization
 _model = None
-_embed_model = "models/text-embedding-004"
+_embed_model = "models/gemini-embedding-001"
 
 
 def _get_model():
@@ -29,13 +29,14 @@ def _get_model():
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY not set")
         genai.configure(api_key=settings.gemini_api_key)
-        _model = genai.GenerativeModel("gemini-1.5-flash")
+        _model = genai.GenerativeModel("gemini-flash-latest")
     return _model
 
 
 def get_embedding(text: str) -> list[float]:
     """
-    Return 768-dim embedding for the given text using Gemini text-embedding-004.
+    Return 768-dim embedding for the given text using gemini-embedding-001
+    with Matryoshka truncation to 768 dims (matches Pinecone index).
     """
     if not settings.gemini_api_key:
         # Return zero vector for testing without API key
@@ -46,6 +47,7 @@ def get_embedding(text: str) -> list[float]:
         model=_embed_model,
         content=text,
         task_type="retrieval_document",
+        output_dimensionality=768,
     )
     return result["embedding"]
 
