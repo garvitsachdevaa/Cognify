@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { solveDoubt, DoubtResponse } from "@/lib/api";
+import MathText from "@/components/MathText";
 
 interface Props {
   userId: number;
@@ -99,7 +100,9 @@ export default function DoubtChat({ userId }: Props) {
                   <span className="flex-shrink-0 w-6 h-6 rounded-full bg-brand-900/60 border border-brand-700/50 text-brand-400 text-xs font-bold flex items-center justify-center mt-0.5">
                     {i + 1}
                   </span>
-                  <p className="text-gray-300 text-sm leading-relaxed">{step}</p>
+                  <p className="text-gray-300 text-sm leading-relaxed">
+                    <MathText text={step} />
+                  </p>
                 </li>
               ))}
             </ol>
@@ -107,7 +110,9 @@ export default function DoubtChat({ userId }: Props) {
             {/* Final answer */}
             <div className="border-t border-gray-800 pt-3 mt-2">
               <p className="text-xs text-gray-500 mb-1">Final Answer</p>
-              <p className="text-brand-300 font-semibold text-lg">{result.final_answer}</p>
+              <p className="text-brand-300 font-semibold text-lg">
+                <MathText text={result.final_answer} />
+              </p>
             </div>
           </div>
 
