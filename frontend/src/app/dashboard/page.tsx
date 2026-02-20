@@ -178,9 +178,9 @@ export default function DashboardPage() {
                     { id: "integration_by_parts", label: "Integration by Parts", isWeak: false },
                     { id: "limits", label: "Limits", isWeak: false },
                     { id: "quadratic_equations", label: "Quadratic Equations", isWeak: false },
-                    { id: "probability", label: "Probability", isWeak: false },
-                    { id: "complex_numbers", label: "Complex Numbers", isWeak: false },
-                    { id: "differentiation", label: "Differentiation", isWeak: false },
+                    { id: "basic_probability", label: "Probability", isWeak: false },
+                    { id: "complex_numbers_basics", label: "Complex Numbers", isWeak: false },
+                    { id: "differentiation_basics", label: "Differentiation", isWeak: false },
                   ]
               ).map((t) => (
                 <Link
