@@ -1,0 +1,236 @@
+"""
+Practice router — core session management.
+  POST /practice/start   → select topic, retrieve learner state, serve questions
+  POST /practice/answer  → record attempt, compute CMS, update skill, maybe remediate
+"""
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app import crud
+from app.db import get_db
+from app.services.cms import compute_cms
+from app.services.concept_graph import get_all_concepts, load_graph
+from app.services.elo import get_or_init_skill, persist_skill, update_skill
+from app.services.gemini_client import get_embedding
+from app.services.ingestion import ingest_topic
+from app.services.pinecone_client import query_questions
+from app.services.remediation import should_remediate, trigger_remediation
+from app.services.supermemory import get_learner_state, write_session_summary
+
+router = APIRouter()
+
+
+# ── Schemas ────────────────────────────────────────────────────────────────────
+
+class PracticeStartRequest(BaseModel):
+    user_id: int
+    topic: str          # e.g. "integration_by_parts"
+    n: int = 5          # number of questions to serve
+
+
+class AnswerRequest(BaseModel):
+    user_id: int
+    question_id: int
+    is_correct: bool
+    time_taken: float   # seconds
+    retries: int = 0
+    hint_used: bool = False
+    confidence: int     # 1–5
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _ensure_concept(db: Session, concept_name: str) -> int:
+    """Get or create the concept in DB, using graph metadata for display info."""
+    graph = load_graph()
+    node = graph.get(concept_name, {})
+    return crud.get_or_create_concept(
+        db,
+        name=concept_name,
+        display_name=node.get("display_name", concept_name.replace("_", " ").title()),
+        topic=node.get("topic", "General"),
+        subtopic=node.get("subtopic", ""),
+    )
+
+
+# ── Routes ─────────────────────────────────────────────────────────────────────
+
+@router.post("/start")
+def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
+    """
+    Full flow:
+    1. Get learner state from Supermemory
+    2. Get skill vector from Postgres
+    3. Get concept embedding → query Pinecone for matching questions
+    4. If not enough questions → ingest from web
+    5. Return question set
+    """
+    # Validate concept
+    all_concepts = get_all_concepts()
+    if body.topic not in all_concepts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown topic '{body.topic}'. Valid topics: {all_concepts[:10]}..."
+        )
+
+    # 1. Learner state from Supermemory
+    learner_state = get_learner_state(body.user_id)
+
+    # 2. Skill from Postgres
+    concept_id = _ensure_concept(db, body.topic)
+    skill = get_or_init_skill(db, body.user_id, concept_id)
+
+    # 3. Query Pinecone
+    questions = []
+    try:
+        query_emb = get_embedding(body.topic.replace("_", " "))
+        questions = query_questions(
+            subtopic=body.topic,
+            query_embedding=query_emb,
+            n=body.n,
+        )
+    except Exception as e:
+        print(f"[Practice] Embedding/Pinecone error: {e}")
+
+    # 4. If not enough, ingest from web
+    if len(questions) < body.n and questions is not None:
+        needed = body.n - len(questions)
+        print(f"[Practice] Only {len(questions)} cached questions — ingesting {needed} more...")
+        try:
+            new_questions = ingest_topic(body.topic, n=needed)
+            # Persist new questions in Postgres
+            for q in new_questions:
+                import json
+                crud.insert_question(
+                    db,
+                    text_=q["text"],
+                    subtopics=q.get("subtopics", [body.topic]),
+                    difficulty=q.get("difficulty", 3),
+                    source_url=q.get("source_url", ""),
+                    text_hash=q["text_hash"],
+                    embedding_id=q["question_id"],
+                )
+            questions.extend(new_questions)
+        except Exception as e:
+            print(f"[Practice] Ingestion error: {e}")
+
+    # Fallback: serve from Postgres if everything else fails
+    if not questions:
+        db_questions = crud.get_questions_by_subtopic(db, body.topic, limit=body.n)
+        questions = [
+            {
+                "question_id": q["id"],
+                "text": q["text"],
+                "subtopics": q["subtopics"],
+                "difficulty": q["difficulty"],
+            }
+            for q in db_questions
+        ]
+
+    return {
+        "user_id": body.user_id,
+        "topic": body.topic,
+        "skill": skill,
+        "learner_state": learner_state,
+        "questions": questions[:body.n],
+        "questions_count": min(len(questions), body.n),
+    }
+
+
+@router.post("/answer")
+def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
+    """
+    Full flow:
+    1. Validate question + confidence
+    2. Compute CMS
+    3. ELO skill update in Postgres
+    4. Check concept graph for weak prereqs
+    5. Write behavior summary to Supermemory
+    6. Trigger remediation if needed
+    7. Return updated skill + next action
+    """
+    # Validate confidence range
+    if not 1 <= body.confidence <= 5:
+        raise HTTPException(status_code=400, detail="confidence must be 1–5")
+
+    # Verify question exists
+    question = crud.get_question_by_id(db, body.question_id)
+    if not question:
+        raise HTTPException(status_code=404, detail=f"Question {body.question_id} not found")
+
+    # Determine concept from question's first subtopic
+    subtopics = question.get("subtopics") or []
+    if isinstance(subtopics, str):
+        import json
+        subtopics = json.loads(subtopics)
+    concept_name = subtopics[0] if subtopics else "unknown"
+
+    concept_id = _ensure_concept(db, concept_name)
+
+    # 1. CMS
+    cms = compute_cms(
+        is_correct=body.is_correct,
+        time_taken=body.time_taken,
+        retries=body.retries,
+        hint_used=body.hint_used,
+        confidence=body.confidence,
+    )
+
+    # 2. Record attempt
+    crud.record_attempt(
+        db,
+        user_id=body.user_id,
+        question_id=body.question_id,
+        is_correct=body.is_correct,
+        time_taken=body.time_taken,
+        retries=body.retries,
+        hint_used=body.hint_used,
+        confidence=body.confidence,
+        cms=cms,
+    )
+
+    # 3. ELO skill update
+    difficulty = question.get("difficulty", 3)
+    old_skill = get_or_init_skill(db, body.user_id, concept_id)
+    new_skill = update_skill(old_skill, difficulty, cms)
+    persist_skill(db, body.user_id, concept_id, new_skill)
+
+    # 4. Concept graph prereq check
+    skill_map = crud.get_all_skills(db, body.user_id)
+    skill_map[concept_name] = new_skill
+
+    # 5. Supermemory — write behavior note
+    status = "correct" if body.is_correct else "incorrect"
+    summary = (
+        f"User {body.user_id} attempted '{concept_name}' (difficulty {difficulty}). "
+        f"Result: {status}. CMS: {cms:.3f}. Skill updated: {old_skill:.0f} → {new_skill:.0f}."
+    )
+    write_session_summary(
+        body.user_id,
+        summary,
+        metadata={"concept": concept_name, "cms": str(cms), "is_correct": str(body.is_correct)},
+    )
+
+    # 6. Remediation check
+    streak = crud.get_incorrect_streak(db, body.user_id, body.question_id)
+    remediation = None
+    if should_remediate(cms, streak):
+        remediation = trigger_remediation(concept_name, skill_map)
+
+    return {
+        "user_id": body.user_id,
+        "question_id": body.question_id,
+        "concept": concept_name,
+        "cms": cms,
+        "old_skill": old_skill,
+        "new_skill": new_skill,
+        "skill_delta": round(new_skill - old_skill, 2),
+        "remediation": remediation,
+        "message": (
+            "Keep it up!" if body.is_correct
+            else ("Remediation triggered — check the lesson below!" if remediation
+                  else "Try again — you've got this!")
+        ),
+    }

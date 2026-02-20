@@ -1,0 +1,252 @@
+"""
+All database operations for Cognify.
+Uses raw SQL via SQLAlchemy text() — simple and fast for MVP.
+"""
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+
+# ── Users ──────────────────────────────────────────────────────────────────────
+
+def create_user(db: Session, name: str, email: str, password_hash: str) -> dict:
+    row = db.execute(
+        text("""
+            INSERT INTO users (name, email, password_hash)
+            VALUES (:name, :email, :pw)
+            RETURNING id, name, email, created_at
+        """),
+        {"name": name, "email": email, "pw": password_hash},
+    ).fetchone()
+    db.commit()
+    return dict(row._mapping)
+
+
+def get_user_by_email(db: Session, email: str) -> dict | None:
+    row = db.execute(
+        text("SELECT id, name, email, password_hash FROM users WHERE email = :e"),
+        {"e": email},
+    ).fetchone()
+    return dict(row._mapping) if row else None
+
+
+def get_user_by_id(db: Session, user_id: int) -> dict | None:
+    row = db.execute(
+        text("SELECT id, name, email FROM users WHERE id = :uid"),
+        {"uid": user_id},
+    ).fetchone()
+    return dict(row._mapping) if row else None
+
+
+# ── Concepts ───────────────────────────────────────────────────────────────────
+
+def get_or_create_concept(
+    db: Session, name: str, display_name: str, topic: str, subtopic: str = ""
+) -> int:
+    """Return concept id, inserting if it doesn't exist."""
+    row = db.execute(
+        text("SELECT id FROM concepts WHERE name = :n"),
+        {"n": name},
+    ).fetchone()
+    if row:
+        return row[0]
+
+    row = db.execute(
+        text("""
+            INSERT INTO concepts (name, display_name, topic, subtopic)
+            VALUES (:n, :dn, :t, :st)
+            RETURNING id
+        """),
+        {"n": name, "dn": display_name, "t": topic, "st": subtopic},
+    ).fetchone()
+    db.commit()
+    return row[0]
+
+
+def get_concept_id(db: Session, concept_name: str) -> int | None:
+    row = db.execute(
+        text("SELECT id FROM concepts WHERE name = :n"),
+        {"n": concept_name},
+    ).fetchone()
+    return row[0] if row else None
+
+
+# ── Skill Vector ───────────────────────────────────────────────────────────────
+
+def get_skill(db: Session, user_id: int, concept_id: int) -> float:
+    row = db.execute(
+        text("SELECT skill FROM user_skill WHERE user_id=:u AND concept_id=:c"),
+        {"u": user_id, "c": concept_id},
+    ).fetchone()
+    return float(row[0]) if row else 1000.0
+
+
+def upsert_skill(db: Session, user_id: int, concept_id: int, new_skill: float) -> None:
+    db.execute(
+        text("""
+            INSERT INTO user_skill (user_id, concept_id, skill, updated_at)
+            VALUES (:u, :c, :s, NOW())
+            ON CONFLICT (user_id, concept_id)
+            DO UPDATE SET skill = :s, updated_at = NOW()
+        """),
+        {"u": user_id, "c": concept_id, "s": new_skill},
+    )
+    db.commit()
+
+
+def get_all_skills(db: Session, user_id: int) -> dict[str, float]:
+    """Return {concept_name: skill} for all concepts a user has practiced."""
+    rows = db.execute(
+        text("""
+            SELECT c.name, us.skill
+            FROM user_skill us
+            JOIN concepts c ON c.id = us.concept_id
+            WHERE us.user_id = :u
+        """),
+        {"u": user_id},
+    ).fetchall()
+    return {r[0]: float(r[1]) for r in rows}
+
+
+# ── Questions ──────────────────────────────────────────────────────────────────
+
+def insert_question(
+    db: Session,
+    text_: str,
+    subtopics: list[str],
+    difficulty: int,
+    source_url: str,
+    text_hash: str,
+    embedding_id: str = "",
+) -> int:
+    """Insert a question; return its Postgres id. Skips if hash exists."""
+    existing = db.execute(
+        text("SELECT id FROM questions WHERE text_hash = :h"),
+        {"h": text_hash},
+    ).fetchone()
+    if existing:
+        return existing[0]
+
+    import json
+    row = db.execute(
+        text("""
+            INSERT INTO questions (text, subtopics, difficulty, source_url, text_hash, embedding_id)
+            VALUES (:t, CAST(:st AS jsonb), :d, :url, :h, :eid)
+            RETURNING id
+        """),
+        {
+            "t": text_,
+            "st": json.dumps(subtopics),
+            "d": difficulty,
+            "url": source_url,
+            "h": text_hash,
+            "eid": embedding_id,
+        },
+    ).fetchone()
+    db.commit()
+    return row[0]
+
+
+def get_question_by_id(db: Session, question_id: int) -> dict | None:
+    row = db.execute(
+        text("SELECT id, text, subtopics, difficulty, source_url FROM questions WHERE id = :qid"),
+        {"qid": question_id},
+    ).fetchone()
+    return dict(row._mapping) if row else None
+
+
+def get_questions_by_subtopic(
+    db: Session, subtopic: str, limit: int = 10
+) -> list[dict]:
+    """Fallback: fetch questions from DB when Pinecone returns nothing."""
+    rows = db.execute(
+        text("""
+            SELECT id, text, subtopics, difficulty, source_url
+            FROM questions
+            WHERE subtopics::text ILIKE :s
+            LIMIT :lim
+        """),
+        {"s": f"%{subtopic}%", "lim": limit},
+    ).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+# ── Attempts ───────────────────────────────────────────────────────────────────
+
+def record_attempt(
+    db: Session,
+    user_id: int,
+    question_id: int,
+    is_correct: bool,
+    time_taken: float,
+    retries: int,
+    hint_used: bool,
+    confidence: int,
+    cms: float,
+) -> dict:
+    row = db.execute(
+        text("""
+            INSERT INTO attempts
+              (user_id, question_id, is_correct, time_taken, retries, hint_used, confidence, cms)
+            VALUES (:u, :q, :ic, :tt, :r, :hu, :conf, :cms)
+            RETURNING id, created_at
+        """),
+        {
+            "u": user_id, "q": question_id, "ic": is_correct,
+            "tt": time_taken, "r": retries, "hu": hint_used,
+            "conf": confidence, "cms": cms,
+        },
+    ).fetchone()
+    db.commit()
+    return dict(row._mapping)
+
+
+def get_recent_attempts(db: Session, user_id: int, n: int = 10) -> list[dict]:
+    rows = db.execute(
+        text("""
+            SELECT a.id, q.text, a.is_correct, a.time_taken, a.cms, a.created_at
+            FROM attempts a
+            JOIN questions q ON q.id = a.question_id
+            WHERE a.user_id = :u
+            ORDER BY a.created_at DESC
+            LIMIT :n
+        """),
+        {"u": user_id, "n": n},
+    ).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def get_incorrect_streak(db: Session, user_id: int, question_id: int) -> int:
+    """Count consecutive incorrect attempts for a specific question."""
+    rows = db.execute(
+        text("""
+            SELECT is_correct FROM attempts
+            WHERE user_id = :u AND question_id = :q
+            ORDER BY created_at DESC
+            LIMIT 5
+        """),
+        {"u": user_id, "q": question_id},
+    ).fetchall()
+    streak = 0
+    for r in rows:
+        if not r[0]:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def get_avg_cms(db: Session, user_id: int, n: int = 10) -> float:
+    row = db.execute(
+        text("""
+            SELECT AVG(cms) FROM (
+                SELECT cms FROM attempts
+                WHERE user_id = :u AND cms IS NOT NULL
+                ORDER BY created_at DESC
+                LIMIT :n
+            ) sub
+        """),
+        {"u": user_id, "n": n},
+    ).fetchone()
+    val = row[0] if row and row[0] is not None else 0.5
+    return round(float(val), 4)

@@ -1,0 +1,325 @@
+{
+  "_comment": "JEE Maths concept dependency graph. Each key is a concept; prerequisites must be mastered first.",
+
+  "sets_and_operations": {
+    "display_name": "Sets and Operations",
+    "topic": "Sets, Relations & Functions",
+    "prerequisites": []
+  },
+  "power_sets": {
+    "display_name": "Power Sets",
+    "topic": "Sets, Relations & Functions",
+    "prerequisites": ["sets_and_operations"]
+  },
+  "relations": {
+    "display_name": "Relations",
+    "topic": "Sets, Relations & Functions",
+    "prerequisites": ["sets_and_operations"]
+  },
+  "functions_domain_range": {
+    "display_name": "Functions — Domain & Range",
+    "topic": "Sets, Relations & Functions",
+    "prerequisites": ["relations"]
+  },
+  "inverse_functions": {
+    "display_name": "Inverse Functions",
+    "topic": "Sets, Relations & Functions",
+    "prerequisites": ["functions_domain_range"]
+  },
+  "composition_of_functions": {
+    "display_name": "Composition of Functions",
+    "topic": "Sets, Relations & Functions",
+    "prerequisites": ["functions_domain_range"]
+  },
+
+  "quadratic_equations": {
+    "display_name": "Quadratic Equations",
+    "topic": "Algebra",
+    "prerequisites": ["functions_domain_range"]
+  },
+  "complex_numbers_basics": {
+    "display_name": "Complex Numbers — Basics",
+    "topic": "Algebra",
+    "prerequisites": ["quadratic_equations"]
+  },
+  "complex_numbers_geometry": {
+    "display_name": "Complex Numbers — Geometry (Argand Plane)",
+    "topic": "Algebra",
+    "prerequisites": ["complex_numbers_basics"]
+  },
+  "de_moivre_theorem": {
+    "display_name": "De Moivre's Theorem",
+    "topic": "Algebra",
+    "prerequisites": ["complex_numbers_basics"]
+  },
+  "arithmetic_progression": {
+    "display_name": "Arithmetic Progression (AP)",
+    "topic": "Algebra",
+    "prerequisites": []
+  },
+  "geometric_progression": {
+    "display_name": "Geometric Progression (GP)",
+    "topic": "Algebra",
+    "prerequisites": ["arithmetic_progression"]
+  },
+  "harmonic_progression": {
+    "display_name": "Harmonic Progression (HP)",
+    "topic": "Algebra",
+    "prerequisites": ["arithmetic_progression", "geometric_progression"]
+  },
+  "binomial_theorem": {
+    "display_name": "Binomial Theorem",
+    "topic": "Algebra",
+    "prerequisites": ["mathematical_induction"]
+  },
+  "permutations": {
+    "display_name": "Permutations",
+    "topic": "Algebra",
+    "prerequisites": []
+  },
+  "combinations": {
+    "display_name": "Combinations",
+    "topic": "Algebra",
+    "prerequisites": ["permutations"]
+  },
+  "basic_probability": {
+    "display_name": "Basic Probability",
+    "topic": "Algebra",
+    "prerequisites": ["combinations"]
+  },
+  "conditional_probability": {
+    "display_name": "Conditional Probability & Bayes",
+    "topic": "Algebra",
+    "prerequisites": ["basic_probability"]
+  },
+  "mathematical_induction": {
+    "display_name": "Mathematical Induction",
+    "topic": "Algebra",
+    "prerequisites": []
+  },
+  "inequalities": {
+    "display_name": "Inequalities (AM-GM, Cauchy-Schwarz)",
+    "topic": "Algebra",
+    "prerequisites": ["arithmetic_progression", "geometric_progression"]
+  },
+
+  "matrix_basics": {
+    "display_name": "Matrix Basics & Operations",
+    "topic": "Matrices & Determinants",
+    "prerequisites": []
+  },
+  "determinants": {
+    "display_name": "Determinants",
+    "topic": "Matrices & Determinants",
+    "prerequisites": ["matrix_basics"]
+  },
+  "inverse_matrix": {
+    "display_name": "Inverse of a Matrix",
+    "topic": "Matrices & Determinants",
+    "prerequisites": ["determinants"]
+  },
+  "linear_systems": {
+    "display_name": "Linear Systems (Cramer's Rule)",
+    "topic": "Matrices & Determinants",
+    "prerequisites": ["inverse_matrix"]
+  },
+
+  "trig_ratios": {
+    "display_name": "Trigonometric Ratios & Basic Identities",
+    "topic": "Trigonometry",
+    "prerequisites": []
+  },
+  "trig_identities": {
+    "display_name": "Trigonometric Identities",
+    "topic": "Trigonometry",
+    "prerequisites": ["trig_ratios"]
+  },
+  "compound_angles": {
+    "display_name": "Compound Angles",
+    "topic": "Trigonometry",
+    "prerequisites": ["trig_identities"]
+  },
+  "multiple_angles": {
+    "display_name": "Multiple & Sub-Multiple Angles",
+    "topic": "Trigonometry",
+    "prerequisites": ["compound_angles"]
+  },
+  "trig_equations": {
+    "display_name": "Trigonometric Equations",
+    "topic": "Trigonometry",
+    "prerequisites": ["trig_identities"]
+  },
+  "inverse_trig": {
+    "display_name": "Inverse Trigonometric Functions",
+    "topic": "Trigonometry",
+    "prerequisites": ["trig_ratios", "inverse_functions"]
+  },
+  "heights_distances": {
+    "display_name": "Heights and Distances",
+    "topic": "Trigonometry",
+    "prerequisites": ["trig_ratios"]
+  },
+
+  "straight_lines": {
+    "display_name": "Straight Lines",
+    "topic": "Coordinate Geometry",
+    "prerequisites": []
+  },
+  "circles": {
+    "display_name": "Circles",
+    "topic": "Coordinate Geometry",
+    "prerequisites": ["straight_lines"]
+  },
+  "parabola": {
+    "display_name": "Parabola",
+    "topic": "Coordinate Geometry",
+    "prerequisites": ["straight_lines"]
+  },
+  "ellipse": {
+    "display_name": "Ellipse",
+    "topic": "Coordinate Geometry",
+    "prerequisites": ["parabola"]
+  },
+  "hyperbola": {
+    "display_name": "Hyperbola",
+    "topic": "Coordinate Geometry",
+    "prerequisites": ["ellipse"]
+  },
+
+  "limits": {
+    "display_name": "Limits",
+    "topic": "Calculus",
+    "prerequisites": ["functions_domain_range"]
+  },
+  "continuity": {
+    "display_name": "Continuity",
+    "topic": "Calculus",
+    "prerequisites": ["limits"]
+  },
+  "differentiation_basics": {
+    "display_name": "Differentiation — Basics",
+    "topic": "Calculus",
+    "prerequisites": ["limits"]
+  },
+  "product_rule": {
+    "display_name": "Product Rule & Quotient Rule",
+    "topic": "Calculus",
+    "prerequisites": ["differentiation_basics"]
+  },
+  "chain_rule": {
+    "display_name": "Chain Rule",
+    "topic": "Calculus",
+    "prerequisites": ["differentiation_basics"]
+  },
+  "implicit_differentiation": {
+    "display_name": "Implicit Differentiation",
+    "topic": "Calculus",
+    "prerequisites": ["chain_rule"]
+  },
+  "higher_order_derivatives": {
+    "display_name": "Higher Order Derivatives",
+    "topic": "Calculus",
+    "prerequisites": ["differentiation_basics"]
+  },
+  "applications_of_derivatives": {
+    "display_name": "Applications of Derivatives (Maxima/Minima)",
+    "topic": "Calculus",
+    "prerequisites": ["higher_order_derivatives", "product_rule"]
+  },
+  "rolle_mean_value": {
+    "display_name": "Rolle's & Mean Value Theorems",
+    "topic": "Calculus",
+    "prerequisites": ["continuity", "differentiation_basics"]
+  },
+  "basic_integration": {
+    "display_name": "Basic Integration",
+    "topic": "Calculus",
+    "prerequisites": ["differentiation_basics"]
+  },
+  "integration_by_substitution": {
+    "display_name": "Integration by Substitution",
+    "topic": "Calculus",
+    "prerequisites": ["basic_integration", "chain_rule"]
+  },
+  "integration_by_parts": {
+    "display_name": "Integration by Parts",
+    "topic": "Calculus",
+    "prerequisites": ["product_rule", "basic_integration"]
+  },
+  "partial_fractions": {
+    "display_name": "Partial Fractions",
+    "topic": "Calculus",
+    "prerequisites": ["basic_integration", "quadratic_equations"]
+  },
+  "definite_integrals": {
+    "display_name": "Definite Integrals",
+    "topic": "Calculus",
+    "prerequisites": ["integration_by_substitution", "integration_by_parts"]
+  },
+  "area_under_curves": {
+    "display_name": "Area Under Curves",
+    "topic": "Calculus",
+    "prerequisites": ["definite_integrals"]
+  },
+  "differential_equations_basics": {
+    "display_name": "Differential Equations — Basics",
+    "topic": "Calculus",
+    "prerequisites": ["basic_integration"]
+  },
+  "separable_ode": {
+    "display_name": "Separable Differential Equations",
+    "topic": "Calculus",
+    "prerequisites": ["differential_equations_basics"]
+  },
+  "linear_ode": {
+    "display_name": "Linear First-Order ODE",
+    "topic": "Calculus",
+    "prerequisites": ["separable_ode", "integration_by_parts"]
+  },
+
+  "vectors_basics": {
+    "display_name": "Vectors — Basics & Algebra",
+    "topic": "Vectors & 3D Geometry",
+    "prerequisites": []
+  },
+  "position_vector": {
+    "display_name": "Position Vectors",
+    "topic": "Vectors & 3D Geometry",
+    "prerequisites": ["vectors_basics"]
+  },
+  "dot_product": {
+    "display_name": "Dot Product",
+    "topic": "Vectors & 3D Geometry",
+    "prerequisites": ["vectors_basics"]
+  },
+  "cross_product": {
+    "display_name": "Cross Product",
+    "topic": "Vectors & 3D Geometry",
+    "prerequisites": ["vectors_basics"]
+  },
+  "direction_ratios": {
+    "display_name": "Direction Ratios & Cosines",
+    "topic": "Vectors & 3D Geometry",
+    "prerequisites": ["position_vector"]
+  },
+  "vector_equation_of_line": {
+    "display_name": "Vector Equation of a Line",
+    "topic": "Vectors & 3D Geometry",
+    "prerequisites": ["direction_ratios", "dot_product"]
+  },
+  "vector_equation_of_plane": {
+    "display_name": "Vector Equation of a Plane",
+    "topic": "Vectors & 3D Geometry",
+    "prerequisites": ["dot_product", "cross_product"]
+  },
+  "shortest_distance": {
+    "display_name": "Shortest Distance Between Lines",
+    "topic": "Vectors & 3D Geometry",
+    "prerequisites": ["vector_equation_of_line", "cross_product"]
+  },
+  "angle_between_lines_planes": {
+    "display_name": "Angles Between Lines/Planes",
+    "topic": "Vectors & 3D Geometry",
+    "prerequisites": ["dot_product", "vector_equation_of_line", "vector_equation_of_plane"]
+  }
+}
