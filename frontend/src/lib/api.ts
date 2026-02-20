@@ -105,13 +105,18 @@ export function solveDoubt(user_id: number, question_text: string) {
 // ─── Dashboard ────────────────────────────────────────────────────────────
 export interface SkillEntry {
   concept: string;
+  display_name: string;
   skill: number;
-  category: string;
+  topic: string;   // backend field name
+  category?: string; // alias – same as topic
 }
 
 export interface AttemptEntry {
-  concept: string;
+  id: number;
+  concept: string;       // derived from first subtopic
+  text: string;          // question text
   is_correct: boolean;
+  time_taken: number;
   cms: number;
   created_at: string;
 }

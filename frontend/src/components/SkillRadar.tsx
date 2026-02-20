@@ -14,11 +14,12 @@ interface Props {
 }
 
 export default function SkillRadar({ skills }: Props) {
-  // Aggregate by category — average skill per category
+  // Aggregate by topic — average skill per topic
   const byCategory: Record<string, number[]> = {};
   for (const s of skills) {
-    if (!byCategory[s.category]) byCategory[s.category] = [];
-    byCategory[s.category].push(s.skill);
+    const key = s.topic || s.category || "General";
+    if (!byCategory[key]) byCategory[key] = [];
+    byCategory[key].push(s.skill);
   }
 
   const data = Object.entries(byCategory).map(([name, vals]) => ({

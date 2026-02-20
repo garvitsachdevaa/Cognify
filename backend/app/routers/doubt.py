@@ -22,6 +22,7 @@ class DoubtRequest(BaseModel):
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @router.post("")
+@router.post("/solve")
 def resolve_doubt(body: DoubtRequest):
     """
     Full flow:

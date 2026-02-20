@@ -82,52 +82,79 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
     concept_id = _ensure_concept(db, body.topic)
     skill = get_or_init_skill(db, body.user_id, concept_id)
 
-    # 3. Query Pinecone
-    questions = []
-    try:
-        query_emb = get_embedding(body.topic.replace("_", " "))
-        questions = query_questions(
-            subtopic=body.topic,
-            query_embedding=query_emb,
-            n=body.n,
-        )
-    except Exception as e:
-        print(f"[Practice] Embedding/Pinecone error: {e}")
+    # 3. Always serve from Postgres first — reliable integer IDs, real JEE questions
+    db_questions = crud.get_questions_by_subtopic(db, body.topic, limit=body.n)
+    questions = [
+        {
+            "id": q["id"],
+            "text": q["text"],
+            "subtopics": q["subtopics"] if isinstance(q["subtopics"], list) else [],
+            "difficulty": int(q["difficulty"]),
+        }
+        for q in db_questions
+    ]
+    seen_ids = {q["id"] for q in questions}
 
-    # 4. If not enough, ingest from web
-    if len(questions) < body.n and questions is not None:
-        needed = body.n - len(questions)
-        print(f"[Practice] Only {len(questions)} cached questions — ingesting {needed} more...")
+    # 4. If not enough DB questions, try Pinecone (translate to DB IDs)
+    if len(questions) < body.n:
         try:
-            new_questions = ingest_topic(body.topic, n=needed)
-            # Persist new questions in Postgres
-            for q in new_questions:
-                import json
-                crud.insert_question(
+            query_emb = get_embedding(body.topic.replace("_", " "))
+            pinecone_hits = query_questions(
+                subtopic=body.topic,
+                query_embedding=query_emb,
+                n=(body.n - len(questions)) * 2,
+            )
+            for ph in (pinecone_hits or []):
+                # Insert/lookup in DB to get a real integer ID
+                db_id = crud.insert_question(
+                    db,
+                    text_=ph["text"],
+                    subtopics=ph.get("subtopics", [body.topic]),
+                    difficulty=int(ph.get("difficulty", 3)),
+                    source_url=ph.get("source_url", ""),
+                    text_hash=ph["text_hash"],
+                    embedding_id=ph.get("question_id", ""),
+                )
+                if db_id not in seen_ids:
+                    questions.append({
+                        "id": db_id,
+                        "text": ph["text"],
+                        "subtopics": ph.get("subtopics", [body.topic]),
+                        "difficulty": int(ph.get("difficulty", 3)),
+                    })
+                    seen_ids.add(db_id)
+                if len(questions) >= body.n:
+                    break
+        except Exception as e:
+            print(f"[Practice] Pinecone error: {e}")
+
+    # 5. Still not enough? Attempt web ingestion (Gemini-dependent)
+    if len(questions) < body.n:
+        try:
+            new_qs = ingest_topic(body.topic, n=body.n - len(questions))
+            for q in new_qs:
+                db_id = crud.insert_question(
                     db,
                     text_=q["text"],
                     subtopics=q.get("subtopics", [body.topic]),
-                    difficulty=q.get("difficulty", 3),
+                    difficulty=int(q.get("difficulty", 3)),
                     source_url=q.get("source_url", ""),
                     text_hash=q["text_hash"],
-                    embedding_id=q["question_id"],
+                    embedding_id=q.get("question_id", ""),
                 )
-            questions.extend(new_questions)
+                if db_id not in seen_ids:
+                    questions.append({
+                        "id": db_id,
+                        "text": q["text"],
+                        "subtopics": q.get("subtopics", [body.topic]),
+                        "difficulty": int(q.get("difficulty", 3)),
+                    })
+                    seen_ids.add(db_id)
         except Exception as e:
             print(f"[Practice] Ingestion error: {e}")
 
-    # Fallback: serve from Postgres if everything else fails
     if not questions:
-        db_questions = crud.get_questions_by_subtopic(db, body.topic, limit=body.n)
-        questions = [
-            {
-                "question_id": q["id"],
-                "text": q["text"],
-                "subtopics": q["subtopics"],
-                "difficulty": q["difficulty"],
-            }
-            for q in db_questions
-        ]
+        raise HTTPException(status_code=404, detail=f"No questions found for topic '{body.topic}'. Try another topic.")
 
     return {
         "user_id": body.user_id,

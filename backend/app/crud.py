@@ -202,9 +202,11 @@ def record_attempt(
 
 
 def get_recent_attempts(db: Session, user_id: int, n: int = 10) -> list[dict]:
+    import json as _json
     rows = db.execute(
         text("""
-            SELECT a.id, q.text, a.is_correct, a.time_taken, a.cms, a.created_at
+            SELECT a.id, q.text, q.subtopics::text as subtopics_raw,
+                   a.is_correct, a.time_taken, a.cms, a.created_at
             FROM attempts a
             JOIN questions q ON q.id = a.question_id
             WHERE a.user_id = :u
@@ -213,7 +215,16 @@ def get_recent_attempts(db: Session, user_id: int, n: int = 10) -> list[dict]:
         """),
         {"u": user_id, "n": n},
     ).fetchall()
-    return [dict(r._mapping) for r in rows]
+    results = []
+    for r in rows:
+        row = dict(r._mapping)
+        try:
+            subtopics = _json.loads(row.pop("subtopics_raw", "[]"))
+            row["concept"] = subtopics[0] if subtopics else "general"
+        except Exception:
+            row["concept"] = "general"
+        results.append(row)
+    return results
 
 
 def get_incorrect_streak(db: Session, user_id: int, question_id: int) -> int:
