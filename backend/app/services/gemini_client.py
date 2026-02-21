@@ -218,3 +218,30 @@ Return ONLY valid JSON with this exact structure:
             "correct_answer": "",
             "explanation": "Could not evaluate answer.",
         }
+
+
+def generate_hint(question_text: str) -> str:
+    """
+    Generate a helpful hint for a JEE maths question WITHOUT giving away the answer.
+    Returns a single hint string (plain text + KaTeX-wrapped math).
+    """
+    prompt = f"""You are a JEE Mathematics tutor. A student needs a hint for this problem:
+
+{question_text}
+
+Give ONE clear, helpful hint that guides the student toward the solution without giving away the final answer.
+Focus on the key concept, formula, or first step they should use.
+
+Rules:
+- ALWAYS wrap any mathematical expression in $...$ for inline math or $$...$$ for display math.
+- Limit to 2-3 sentences.
+- Do NOT reveal the final numerical answer.
+- Return only the hint text, no preamble."""
+
+    try:
+        model = _get_model()
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"[Gemini] generate_hint error: {e}")
+        return "Think about the key formula or identity relevant to this topic and try applying it step by step."

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { Question, AnswerResponse, submitAnswer } from "@/lib/api";
+import { Question, AnswerResponse, submitAnswer, getHint } from "@/lib/api";
 import MathText from "@/components/MathText";
 
 interface Props {
@@ -29,6 +29,8 @@ const DIFF_COLORS: Record<number, string> = {
 export default function QuestionCard({ question, userId, index, total, onResult }: Props) {
   const [userAnswer, setUserAnswer] = useState("");
   const [hintUsed, setHintUsed] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
+  const [hintLoading, setHintLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -40,6 +42,8 @@ export default function QuestionCard({ question, userId, index, total, onResult 
   useEffect(() => {
     setUserAnswer("");
     setHintUsed(false);
+    setHint(null);
+    setHintLoading(false);
     setElapsed(0);
     setSubmitting(false);
     setSubmitted(false);
@@ -128,23 +132,58 @@ export default function QuestionCard({ question, userId, index, total, onResult 
       {!submitted ? (
         <>
           {/* Hint toggle */}
-          <label className="flex items-center gap-2.5 cursor-pointer select-none w-fit">
-            <div
-              onClick={() => setHintUsed(!hintUsed)}
-              className={`w-10 h-5 rounded-full relative transition-colors ${
-                hintUsed ? "bg-amber-500" : "bg-gray-700"
-              }`}
-            >
+          <div className="space-y-2">
+            <label className="flex items-center gap-2.5 cursor-pointer select-none w-fit">
               <div
-                className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                  hintUsed ? "translate-x-5" : "translate-x-0.5"
+                onClick={async () => {
+                  if (!hintUsed) {
+                    setHintUsed(true);
+                    if (!hint) {
+                      setHintLoading(true);
+                      try {
+                        const res = await getHint(question.id);
+                        setHint(res.hint);
+                      } catch {
+                        setHint("Could not load hint. Try thinking about the key formula for this topic.");
+                      } finally {
+                        setHintLoading(false);
+                      }
+                    }
+                  } else {
+                    setHintUsed(false);
+                  }
+                }}
+                className={`w-10 h-5 rounded-full relative transition-colors ${
+                  hintUsed ? "bg-amber-500" : "bg-gray-700"
                 }`}
-              />
-            </div>
-            <span className="text-sm text-gray-400">
-              {hintUsed ? "✦ Hint used (reduces score)" : "Use hint"}
-            </span>
-          </label>
+              >
+                <div
+                  className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                    hintUsed ? "translate-x-5" : "translate-x-0.5"
+                  }`}
+                />
+              </div>
+              <span className="text-sm text-gray-400">
+                {hintUsed ? "✦ Hint used (reduces score)" : "Use hint"}
+              </span>
+            </label>
+
+            {hintUsed && (
+              <div className="bg-amber-900/20 border border-amber-700/40 rounded-xl px-4 py-3 text-sm">
+                {hintLoading ? (
+                  <div className="flex items-center gap-2 text-amber-400">
+                    <span className="w-3.5 h-3.5 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
+                    Generating hint…
+                  </div>
+                ) : hint ? (
+                  <div className="text-amber-200">
+                    <span className="font-semibold text-amber-400 mr-1">Hint:</span>
+                    <MathText text={hint} />
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
 
           {/* Answer input */}
           <div className="space-y-2">

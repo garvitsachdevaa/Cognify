@@ -13,7 +13,7 @@ from app.db import get_db
 from app.services.cms import compute_cms
 from app.services.concept_graph import get_all_concepts, load_graph
 from app.services.elo import get_or_init_skill, persist_skill, update_skill
-from app.services.gemini_client import get_embedding, check_answer
+from app.services.gemini_client import get_embedding, check_answer, generate_hint
 from app.services.ingestion import ingest_topic
 from app.services.pinecone_client import query_questions
 from app.services.remediation import should_remediate, trigger_remediation
@@ -379,3 +379,13 @@ def adaptive_start(body: AdaptiveStartRequest, db: Session = Depends(get_db)):
         PracticeStartRequest(user_id=body.user_id, topic=chosen_topic, n=body.n),
         db,
     )
+
+
+@router.get("/hint/{question_id}")
+def get_hint(question_id: int, db: Session = Depends(get_db)):
+    """Return a Gemini-generated hint for the given question without revealing the answer."""
+    q = crud.get_question_by_id(db, question_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    hint_text = generate_hint(q["text"])
+    return {"hint": hint_text}

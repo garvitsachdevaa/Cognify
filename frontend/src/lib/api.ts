@@ -106,6 +106,11 @@ export function solveDoubt(user_id: number, question_text: string) {
   });
 }
 
+// ─── Hint ────────────────────────────────────────────────────────────────
+export function getHint(question_id: number) {
+  return request<{ hint: string }>(`/practice/hint/${question_id}`);
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────
 export interface SkillEntry {
   concept: string;
