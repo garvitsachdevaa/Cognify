@@ -26,11 +26,12 @@ const NCR_RE = /\^\{?\d+\}?[CP]_?\{?\d+\}?/g;
  * or nCr/nPr notation, treat the whole string as a display-math block.
  */
 function preProcess(text: string): string {
-  if (!text.includes("$") && (LATEX_CMD_RE.test(text) || NCR_RE.test(text))) {
+  const t = String(text ?? "");
+  if (!t.includes("$") && (LATEX_CMD_RE.test(t) || NCR_RE.test(t))) {
     NCR_RE.lastIndex = 0; // reset after test
-    return `$$${text}$$`;
+    return `$$${t}$$`;
   }
-  return text;
+  return t;
 }
 
 /**
@@ -104,7 +105,7 @@ function tokenise(raw: string): Array<{ type: "text" | "block" | "inline"; value
 }
 
 export default function MathText({ text, className }: Props) {
-  const tokens = tokenise(text);
+  const tokens = tokenise(String(text ?? ""));
   return (
     <span className={className}>
       {tokens.map((tok, i) => {
