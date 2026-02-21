@@ -138,10 +138,11 @@ Problem: {question_text}
 Return ONLY valid JSON with this exact structure:
 {{
   "steps": ["Step 1: ...", "Step 2: ...", "..."],
-  "final_answer": "<answer as a number or expression>",
+  "final_answer": "<the final answer — ALWAYS wrap any mathematical expression in $...$ for inline math or $$...$$ for display math, e.g. '$x = \\frac{{1}}{{2}}$' or '$$P(A) = \\frac{{n(A)}}{{n(S)}}$$'>",
   "sympy_expr": "<sympy-compatible Python expression for the final answer, or empty string>"
 }}
 
+IMPORTANT: ALL mathematical expressions — in both steps and final_answer — MUST be wrapped in $...$ (inline) or $$...$$ (block). Never output raw LaTeX without $ delimiters.
 Be precise. Each step must be clear and numbered."""
 
     try:
