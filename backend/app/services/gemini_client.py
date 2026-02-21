@@ -75,29 +75,47 @@ def get_embedding(text: str) -> list[float]:
 
 def classify_question(question_text: str) -> dict:
     """
-    Classify a question into subtopics and difficulty (1–5).
+    Classify a question into type (MCQ/numerical), subtopics, difficulty,
+    and extract correct answer.
 
     Returns:
-        {"subtopics": ["integration_by_parts"], "difficulty": 3}
+        {
+            "question_type": "mcq" | "numerical",
+            "subtopics": ["integration_by_parts"],
+            "difficulty": 3,
+            "options": {"A": "...", "B": "...", "C": "...", "D": "..."},  # MCQ only, else null
+            "correct_option": "B",  # MCQ only, else null
+            "correct_answer": "42"  # numerical string, else the option letter for MCQ
+        }
     """
-    prompt = f"""You are a JEE Mathematics expert. Classify the following question.
+    prompt = f"""You are a JEE Mathematics expert. Analyse the following question.
 
 Question: {question_text}
 
-Return ONLY valid JSON with this exact structure:
+Determine:
+1. Is it MCQ (multiple choice with 4 options) or numerical (integer/decimal answer)?
+2. The relevant JEE subtopics in snake_case (e.g. integration_by_parts).
+3. Difficulty 1-5 (1=easy, 5=JEE Advanced).
+4. If MCQ: extract options A/B/C/D and the correct option letter.
+5. If numerical: solve and provide the correct numeric answer.
+
+Return ONLY valid JSON:
 {{
-  "subtopics": ["<concept_key_1>", "<concept_key_2>"],
-  "difficulty": <integer 1-5>
+  "question_type": "mcq or numerical",
+  "subtopics": ["<concept_key>"],
+  "difficulty": <1-5>,
+  "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}} or null,
+  "correct_option": "B" or null,
+  "correct_answer": "42" or null
 }}
 
-Use snake_case concept keys from standard JEE maths topics.
-Do not include any explanation, only the JSON."""
+If MCQ and options are not present in the question text, generate plausible JEE-style options.
+Only the JSON — no explanation."""
 
     try:
         model = _get_model()
         response = model.generate_content(prompt)
         raw = response.text.strip()
-        # Strip markdown code fences if present
         if "```" in raw:
             parts = raw.split("```")
             raw = parts[1].strip()
@@ -107,10 +125,25 @@ Do not include any explanation, only the JSON."""
         end = raw.rfind("}") + 1
         if start != -1 and end > start:
             raw = raw[start:end]
-        return json.loads(raw)
+        result = json.loads(raw)
+        # Normalise
+        result.setdefault("question_type", "numerical")
+        result.setdefault("subtopics", ["unknown"])
+        result.setdefault("difficulty", 3)
+        result.setdefault("options", None)
+        result.setdefault("correct_option", None)
+        result.setdefault("correct_answer", None)
+        return result
     except Exception as e:
         print(f"[Gemini] classify_question error: {e}")
-        return {"subtopics": ["unknown"], "difficulty": 3}
+        return {
+            "question_type": "numerical",
+            "subtopics": ["unknown"],
+            "difficulty": 3,
+            "options": None,
+            "correct_option": None,
+            "correct_answer": None,
+        }
 
 
 def generate_lesson(concept: str, learner_context: str = "") -> str:
@@ -254,71 +287,6 @@ Be precise. Each step must be clear and numbered."""
         }
 
 
-def check_answer(question_text: str, user_answer: str, learner_context: str = "") -> dict:
-    """
-    Check whether a user's answer to a JEE maths question is correct.
-
-    Returns:
-        {
-            "is_correct": bool,
-            "correct_answer": str,
-            "explanation": str
-        }
-    """
-    context_block = (
-        f"\nLearner context (use to personalise your explanation tone): {learner_context}"
-        if learner_context else ""
-    )
-    prompt = f"""You are a JEE Mathematics expert grading an answer.{context_block}
-
-Question: {question_text}
-Your answer: {user_answer}
-
-Evaluate whether the answer is mathematically correct (accept equivalent forms).
-Speak directly to the learner using "you" (not "the student").
-
-Respond on EXACTLY 3 lines in this format (no extra text, no JSON, no markdown):
-CORRECT: yes
-ANSWER: <concise correct answer in plain text, e.g. 12 or 1/(1+cosx) or sqrt(169-25)>
-REASON: <one plain-text sentence explaining why correct or what you missed>"""
-
-    try:
-        raw = _call_with_retry(prompt).strip()
-        result = {"is_correct": False, "correct_answer": "", "explanation": ""}
-        for line in raw.splitlines():
-            line = line.strip()
-            if line.upper().startswith("CORRECT:"):
-                val = line.split(":", 1)[1].strip().lower()
-                result["is_correct"] = val in ("yes", "true", "correct")
-            elif line.upper().startswith("ANSWER:"):
-                result["correct_answer"] = line.split(":", 1)[1].strip()
-            elif line.upper().startswith("REASON:"):
-                result["explanation"] = line.split(":", 1)[1].strip()
-        # Fallback: if nothing parsed, attempt lenient JSON parse
-        if not result["correct_answer"] and "{" in raw:
-            try:
-                start = raw.find("{")
-                end = raw.rfind("}") + 1
-                # Escape bare backslashes before parsing
-                candidate = raw[start:end]
-                import re as _re
-                candidate = _re.sub(r'(?<!\\)\\(?![\\"nrtbf/u])', r'\\\\', candidate)
-                parsed = json.loads(candidate)
-                result["is_correct"] = bool(parsed.get("is_correct", False))
-                result["correct_answer"] = str(parsed.get("correct_answer", ""))
-                result["explanation"] = str(parsed.get("explanation", ""))
-            except Exception:
-                pass
-        return result
-    except Exception as e:
-        print(f"[Gemini] check_answer error: {e}")
-        return {
-            "is_correct": False,
-            "correct_answer": "",
-            "explanation": "Answer could not be auto-graded — check the correct answer above.",
-        }
-
-
 def generate_hint(question_text: str, learner_context: str = "") -> str:
     """
     Generate a helpful hint for a JEE maths question WITHOUT giving away the answer.
@@ -353,31 +321,38 @@ Rules:
 
 def generate_questions_for_topic(topic: str, n: int = 5, learner_context: str = "") -> list[dict]:
     """
-    Generate n JEE-level practice questions for a topic on the fly.
-    Called as a fallback when DB + Pinecone both return empty for a new topic.
+    Generate n JEE-level MCQ and numerical questions for a topic.
+    Called as fallback when Pinecone + Tavily both return nothing.
 
-    Returns list of dicts: [{"text": str, "difficulty": int}, ...]
+    Returns list of dicts with full MCQ/numerical structure.
     """
     context_block = (
-        f"\nLearner context (use to target question difficulty and style): {learner_context}"
+        f"\nLearner context (target difficulty accordingly): {learner_context}"
         if learner_context else ""
     )
     prompt = f"""You are an expert JEE Mathematics problem setter.{context_block}
-Generate exactly {n} JEE-level practice questions for the topic: **{topic.replace('_', ' ')}**.
+Generate exactly {n} JEE-style practice questions for: **{topic.replace('_', ' ')}**.
 
-Each question must:
-- Be a clear, self-contained problem (no sub-parts a/b/c)
-- Require actual calculation or proof, not just recall
-- Use KaTeX-compatible LaTeX wrapped in $...$ for inline or $$...$$ for display math
-- Use $^nC_r$ notation for combinations (e.g. $^8C_2$) and $^nP_r$ for permutations — never use \\binom.
-- Use \\dfrac instead of \\frac for fractions.
-- Vary in difficulty (mix of straightforward and tricky)
+Mix of MCQ (multiple choice) and numerical (integer answer) types, as in JEE Mains/Advanced.
 
-Return ONLY a JSON array with exactly {n} objects, each with:
-  "text": "<the question string with LaTeX>",
-  "difficulty": <integer 1-5>
+Return ONLY a JSON array, each object:
+{{
+  "text": "<question with math in $...$ LaTeX>",
+  "question_type": "mcq" or "numerical",
+  "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}} or null,
+  "correct_option": "B" or null,
+  "correct_answer": "42" or null,
+  "difficulty": <1-5>,
+  "subtopics": ["<snake_case_concept>"]
+}}
 
-No extra text, no markdown fences, just the raw JSON array."""
+Rules:
+- MCQ: exactly 4 options, one correct_option letter, correct_answer = null
+- numerical: options = null, correct_option = null, correct_answer = integer/decimal string
+- Use $...$ inline math, $$...$$ display math
+- Use $^nC_r$ for combinations, $\\dfrac{{a}}{{b}}$ for fractions
+- Authentic JEE style, no trivial questions
+- No extra text outside JSON array"""
 
     try:
         raw = _call_with_retry(prompt)

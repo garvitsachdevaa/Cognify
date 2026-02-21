@@ -76,7 +76,7 @@ def ingest_topic(topic: str, n: int = 10) -> list[dict]:
             continue
         seen_hashes.add(text_hash)
 
-        # Classify with Gemini
+        # Classify with Gemini (now returns question_type, options, correct_answer, etc.)
         classification = classify_question(text)
 
         # Embed with Gemini
@@ -84,9 +84,18 @@ def ingest_topic(topic: str, n: int = 10) -> list[dict]:
 
         question_id = f"Q_{text_hash[:16]}"
 
+        # Serialize options dict → JSON string for Pinecone (flat metadata required)
+        import json as _json
+        options = classification.get("options")
+        options_str = _json.dumps(options) if options else None
+
         metadata = {
             "question_id": question_id,
             "text": text[:500],  # Pinecone metadata size limit
+            "question_type": classification.get("question_type", "numerical"),
+            "options": options_str or "",       # empty string = no options (Pinecone needs strings)
+            "correct_option": classification.get("correct_option") or "",
+            "correct_answer": classification.get("correct_answer") or "",
             "subtopics": classification.get("subtopics", [topic]),
             "difficulty": classification.get("difficulty", 3),
             "source_url": q.get("source_url", ""),

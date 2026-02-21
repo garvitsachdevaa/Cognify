@@ -16,7 +16,7 @@ from app.db import get_db
 from app.services.cms import compute_cms
 from app.services.concept_graph import get_all_concepts, load_graph
 from app.services.elo import get_or_init_skill, persist_skill, update_skill
-from app.services.gemini_client import get_embedding, check_answer, generate_hint, generate_questions_for_topic
+from app.services.gemini_client import get_embedding, generate_hint, generate_questions_for_topic
 from app.services.ingestion import ingest_topic
 from app.services.pinecone_client import query_questions
 from app.services.remediation import should_remediate, trigger_remediation
@@ -63,11 +63,10 @@ def _elo_to_difficulty(elo: float) -> tuple[int, int]:
 class AnswerRequest(BaseModel):
     user_id: int
     question_id: int
-    user_answer: str        # student's typed answer
+    user_answer: str        # selected option letter (A/B/C/D) for MCQ, numeric string for numerical
     time_taken: float       # seconds
-    retries: int = 0
+    retries: int = 0        # 0 = first attempt, 1 = second attempt (after retry)
     hint_used: bool = False
-    confidence: int = 3     # 1–5, optional (defaults to middle)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -183,6 +182,17 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
             text = ph.get("text", "").strip()
             if not text or not _is_valid_question(text):
                 continue
+            # Parse options from JSON string (Pinecone stores flat metadata)
+            raw_opts = ph.get("options", "")
+            options = None
+            if raw_opts:
+                try:
+                    options = json.loads(raw_opts)
+                except Exception:
+                    options = None
+            qtype = ph.get("question_type", "numerical")
+            correct_option = ph.get("correct_option") or None
+            correct_answer = ph.get("correct_answer") or None
             try:
                 db_id = crud.insert_question(
                     db,
@@ -192,6 +202,10 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
                     source_url=ph.get("source_url", ""),
                     text_hash=ph.get("text_hash", hashlib.sha256(text.encode()).hexdigest()),
                     embedding_id=ph.get("question_id", ""),
+                    question_type=qtype,
+                    options=options,
+                    correct_option=correct_option,
+                    correct_answer=correct_answer,
                 )
             except Exception:
                 continue
@@ -200,6 +214,10 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
             qs.append({
                 "id": db_id,
                 "text": text,
+                "question_type": qtype,
+                "options": options,
+                "correct_option": correct_option,
+                "correct_answer": correct_answer,
                 "subtopics": ph.get("subtopics", [body.topic]),
                 "difficulty": int(ph.get("difficulty", 3)),
             })
@@ -239,16 +257,27 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
             if not text or not _is_valid_question(text):
                 continue
             diff = max(1, min(5, int(gq.get("difficulty", 3))))
+            qtype = gq.get("question_type", "numerical")
+            options = gq.get("options")
+            correct_option = gq.get("correct_option")
+            correct_answer = gq.get("correct_answer")
             h = hashlib.sha256(text.strip().lower().encode()).hexdigest()
             try:
                 db_id = crud.insert_question(
                     db, text_=text, subtopics=[body.topic], difficulty=diff,
                     source_url="gemini_generated", text_hash=h, embedding_id="",
+                    question_type=qtype, options=options,
+                    correct_option=correct_option, correct_answer=correct_answer,
                 )
             except Exception:
                 continue
             if db_id not in result_ids:
-                questions.append({"id": db_id, "text": text, "subtopics": [body.topic], "difficulty": diff})
+                questions.append({
+                    "id": db_id, "text": text,
+                    "question_type": qtype, "options": options,
+                    "correct_option": correct_option, "correct_answer": correct_answer,
+                    "subtopics": [body.topic], "difficulty": diff,
+                })
                 result_ids.add(db_id)
     else:
         try:
@@ -276,42 +305,54 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
 @router.post("/answer")
 def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
     """
-    Parallel flow to minimise latency:
-      1. Validate + load question  [instant]
-      2. check_answer() via Gemini [1-3s]  ← blocking, needed for everything
-      3. CMS + ELO + DB writes     [instant, sequential]
-      4. PARALLEL:
-           a. write_session_summary() to Supermemory   [~1s]
-           b. trigger_remediation() + generate_lesson() [~3s]
-         → both fire simultaneously, wait with .result()
-      Total: ~2-4s instead of ~6-8s
+    Direct-match grading — no Gemini needed.
+      MCQ:       user_answer (A/B/C/D) == correct_option
+      Numerical: abs(float(user_answer) - float(correct_answer)) < 0.01
+    CMS: 0.60*accuracy + 0.25*time_score + 0.15*hint_score
     """
-    # ── Validate ──────────────────────────────────────────────────────────────
-    if not 1 <= body.confidence <= 5:
-        raise HTTPException(status_code=400, detail="confidence must be 1–5")
-
     question = crud.get_question_by_id(db, body.question_id)
     if not question:
         raise HTTPException(status_code=404, detail=f"Question {body.question_id} not found")
 
-    # ── Step 1: Gemini grading + learner state IN PARALLEL ──────────────────────
-    # Both are independent — fire them together, saves ~10s vs sequential
-    check_future: Future = _EXECUTOR.submit(
-        check_answer, question.get("text", ""), body.user_answer
-    )
+    # Learner state in background (for remediation personalisation)
     learner_state_future: Future = _EXECUTOR.submit(get_learner_state, body.user_id)
 
-    check = check_future.result(timeout=20)
-    try:
-        learner_state = learner_state_future.result(timeout=4)
-    except Exception:
-        learner_state = {}
-    learner_ctx = format_learner_context(learner_state)
-    is_correct   = check.get("is_correct", False)
-    correct_answer = check.get("correct_answer", "")
-    explanation  = check.get("explanation", "")
+    # ── Direct-match grading ───────────────────────────────────────────────────
+    question_type = question.get("question_type", "numerical")
 
-    # ── Step 2: fast DB ops (all instant) ─────────────────────────────────────
+    raw_opts = question.get("options")
+    options: dict | None = None
+    if raw_opts:
+        try:
+            options = json.loads(raw_opts) if isinstance(raw_opts, str) else raw_opts
+        except Exception:
+            options = None
+
+    correct_option     = (question.get("correct_option") or "").strip()
+    correct_answer_str = (question.get("correct_answer") or "").strip()
+
+    if question_type == "mcq":
+        is_correct = body.user_answer.upper().strip() == correct_option.upper()
+        if options and correct_option:
+            option_text = options.get(correct_option, "")
+            correct_answer_display = f"{correct_option}) {option_text}" if option_text else correct_option
+        else:
+            correct_answer_display = correct_option
+        explanation = "Correct option selected." if is_correct else f"The correct option is {correct_option}."
+    else:  # numerical
+        try:
+            user_val = float(body.user_answer.strip())
+            correct_val = float(correct_answer_str)
+            is_correct = abs(user_val - correct_val) < 0.01
+        except (ValueError, TypeError):
+            is_correct = body.user_answer.strip().lower() == correct_answer_str.lower()
+        correct_answer_display = correct_answer_str
+        explanation = (
+            f"Correct! The answer is {correct_answer_str}." if is_correct
+            else f"The correct answer is {correct_answer_str}."
+        )
+
+    # ── Fast DB ops ────────────────────────────────────────────────────────────
     subtopics = question.get("subtopics") or []
     if isinstance(subtopics, str):
         subtopics = json.loads(subtopics)
@@ -323,7 +364,6 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
         time_taken=body.time_taken,
         retries=body.retries,
         hint_used=body.hint_used,
-        confidence=body.confidence,
     )
 
     crud.record_attempt(
@@ -334,7 +374,6 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
         time_taken=body.time_taken,
         retries=body.retries,
         hint_used=body.hint_used,
-        confidence=body.confidence,
         cms=cms,
     )
 
@@ -349,19 +388,23 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
     streak = crud.get_incorrect_streak(db, body.user_id, body.question_id)
     needs_remediation = should_remediate(cms, streak)
 
-    # ── Step 3: fire Supermemory write + remediation IN PARALLEL ──────────────
+    # ── Learner state + Supermemory + remediation ──────────────────────────────
+    try:
+        learner_state = learner_state_future.result(timeout=4)
+    except Exception:
+        learner_state = {}
+    learner_ctx = format_learner_context(learner_state)
+
     status  = "correct" if is_correct else "incorrect"
     summary = (
         f"Attempted '{concept_name}' (difficulty {difficulty}). "
-        f"Result: {status}. CMS score: {cms:.3f}. Skill: {old_skill:.0f} → {new_skill:.0f}. "
-        f"Time taken: {body.time_taken:.0f}s. Hint used: {body.hint_used}. Retries: {body.retries}."
+        f"Result: {status}. CMS: {cms:.3f}. Skill: {old_skill:.0f} → {new_skill:.0f}. "
+        f"Time: {body.time_taken:.0f}s. Hint: {body.hint_used}. Retries: {body.retries}."
     )
 
-    # Supermemory write is fire-and-forget — never block the response on it
     _EXECUTOR.submit(
         write_session_summary,
-        body.user_id,
-        summary,
+        body.user_id, summary,
         {"concept": concept_name, "cms": str(cms), "is_correct": str(is_correct)},
     )
 
@@ -378,19 +421,18 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
         except Exception as e:
             print(f"[Remediation] failed (non-fatal): {e}")
 
-    # ── Step 4: return ─────────────────────────────────────────────────────────
     return {
-        "user_id":       body.user_id,
-        "question_id":   body.question_id,
-        "concept":       concept_name,
-        "is_correct":    is_correct,
-        "correct_answer": correct_answer,
-        "explanation":   explanation,
-        "cms":           cms,
-        "old_skill":     old_skill,
-        "new_skill":     new_skill,
-        "skill_delta":   round(new_skill - old_skill, 2),
-        "remediation":   remediation,
+        "user_id":        body.user_id,
+        "question_id":    body.question_id,
+        "concept":        concept_name,
+        "is_correct":     is_correct,
+        "correct_answer": correct_answer_display,
+        "explanation":    explanation,
+        "cms":            cms,
+        "old_skill":      old_skill,
+        "new_skill":      new_skill,
+        "skill_delta":    round(new_skill - old_skill, 2),
+        "remediation":    remediation,
         "message": (
             "Correct! Well done!" if is_correct
             else ("Remediation triggered — check the lesson below!" if remediation

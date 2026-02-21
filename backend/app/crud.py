@@ -118,6 +118,10 @@ def insert_question(
     source_url: str,
     text_hash: str,
     embedding_id: str = "",
+    question_type: str = "numerical",
+    options: dict | None = None,
+    correct_option: str | None = None,
+    correct_answer: str | None = None,
 ) -> int:
     """Insert a question; return its Postgres id. Skips if hash exists."""
     existing = db.execute(
@@ -128,14 +132,22 @@ def insert_question(
         return existing[0]
 
     import json
+    options_str = json.dumps(options) if options else None
     row = db.execute(
         text("""
-            INSERT INTO questions (text, subtopics, difficulty, source_url, text_hash, embedding_id)
-            VALUES (:t, CAST(:st AS jsonb), :d, :url, :h, :eid)
+            INSERT INTO questions
+              (text, question_type, options, correct_option, correct_answer,
+               subtopics, difficulty, source_url, text_hash, embedding_id)
+            VALUES (:t, :qtype, :opts, :copt, :cans,
+                    CAST(:st AS jsonb), :d, :url, :h, :eid)
             RETURNING id
         """),
         {
             "t": text_,
+            "qtype": question_type,
+            "opts": options_str,
+            "copt": correct_option,
+            "cans": correct_answer,
             "st": json.dumps(subtopics),
             "d": difficulty,
             "url": source_url,
@@ -149,7 +161,11 @@ def insert_question(
 
 def get_question_by_id(db: Session, question_id: int) -> dict | None:
     row = db.execute(
-        text("SELECT id, text, subtopics, difficulty, source_url FROM questions WHERE id = :qid"),
+        text("""
+            SELECT id, text, question_type, options, correct_option, correct_answer,
+                   subtopics, difficulty, source_url
+            FROM questions WHERE id = :qid
+        """),
         {"qid": question_id},
     ).fetchone()
     return dict(row._mapping) if row else None
@@ -251,20 +267,19 @@ def record_attempt(
     time_taken: float,
     retries: int,
     hint_used: bool,
-    confidence: int,
     cms: float,
 ) -> dict:
     row = db.execute(
         text("""
             INSERT INTO attempts
-              (user_id, question_id, is_correct, time_taken, retries, hint_used, confidence, cms)
-            VALUES (:u, :q, :ic, :tt, :r, :hu, :conf, :cms)
+              (user_id, question_id, is_correct, time_taken, retries, hint_used, cms)
+            VALUES (:u, :q, :ic, :tt, :r, :hu, :cms)
             RETURNING id, created_at
         """),
         {
             "u": user_id, "q": question_id, "ic": is_correct,
             "tt": time_taken, "r": retries, "hu": hint_used,
-            "conf": confidence, "cms": cms,
+            "cms": cms,
         },
     ).fetchone()
     db.commit()

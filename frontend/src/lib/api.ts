@@ -55,6 +55,10 @@ export interface Question {
   text: string;
   difficulty: number;
   subtopics: string[];
+  question_type: "mcq" | "numerical";
+  options?: { A: string; B: string; C: string; D: string } | null;
+  correct_option?: string | null;
+  correct_answer?: string | null;
 }
 
 export interface PracticeStartResponse {
@@ -96,7 +100,6 @@ export function submitAnswer(
   time_taken: number,
   retries = 0,
   hint_used = false,
-  confidence = 3
 ) {
   return request<AnswerResponse>("/practice/answer", {
     method: "POST",
@@ -107,9 +110,8 @@ export function submitAnswer(
       time_taken,
       retries,
       hint_used,
-      confidence,
     }),
-  }, 40000); // 40s — Gemini grading
+  }, 15000); // 15s — direct match grading, no Gemini needed
 }
 
 // ─── Doubt ────────────────────────────────────────────────────────────────

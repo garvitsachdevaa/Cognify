@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS user_skill (
 CREATE TABLE IF NOT EXISTS questions (
     id              SERIAL PRIMARY KEY,
     text            TEXT        NOT NULL,
+    question_type   TEXT        NOT NULL DEFAULT 'numerical' CHECK (question_type IN ('mcq', 'numerical')),
+    options         TEXT        DEFAULT NULL,  -- JSON string: {"A":"...","B":"...","C":"...","D":"..."}
+    correct_option  TEXT        DEFAULT NULL,  -- 'A'/'B'/'C'/'D' for MCQ
+    correct_answer  TEXT        DEFAULT NULL,  -- numeric string for numerical, option letter for MCQ
     subtopics       JSONB       NOT NULL DEFAULT '[]',  -- ["integration_by_parts"]
     difficulty      INT         NOT NULL CHECK (difficulty BETWEEN 1 AND 5),
     source_url      TEXT,
@@ -51,7 +55,6 @@ CREATE TABLE IF NOT EXISTS attempts (
     time_taken      FLOAT   NOT NULL,   -- seconds
     retries         INT     NOT NULL DEFAULT 0,
     hint_used       BOOLEAN NOT NULL DEFAULT FALSE,
-    confidence      INT     NOT NULL CHECK (confidence BETWEEN 1 AND 5),
     cms             FLOAT,              -- computed after insert
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
