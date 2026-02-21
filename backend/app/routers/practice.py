@@ -131,8 +131,8 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
             detail=f"Unknown topic '{body.topic}'. Valid topics: {all_concepts[:10]}..."
         )
 
-    # 1. Learner state from Supermemory
-    learner_state = get_learner_state(body.user_id)
+    # 1. Learner state from Supermemory — run in background while DB work proceeds
+    learner_state_future: Future = _EXECUTOR.submit(get_learner_state, body.user_id)
 
     # 2. Skill from Postgres — determines difficulty band
     concept_id = _ensure_concept(db, body.topic)
@@ -176,7 +176,11 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
         )
         db_questions.extend(extra)
 
-    # Format learner context for Gemini (used in question generation fallback)
+    # Resolve learner state (only needed for Gemini fallback — was running in background)
+    try:
+        learner_state = learner_state_future.result(timeout=4)
+    except Exception:
+        learner_state = {}
     learner_ctx = format_learner_context(learner_state)
 
     questions = [
@@ -289,11 +293,19 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
     if not question:
         raise HTTPException(status_code=404, detail=f"Question {body.question_id} not found")
 
-    # ── Step 1: Gemini grading (must finish before CMS/ELO) ──────────────────
-    # Pull learner memory to personalise grading explanation
-    learner_state = get_learner_state(body.user_id)
-    learner_ctx   = format_learner_context(learner_state)
-    check = check_answer(question.get("text", ""), body.user_answer, learner_context=learner_ctx)
+    # ── Step 1: Gemini grading + learner state IN PARALLEL ──────────────────────
+    # Both are independent — fire them together, saves ~10s vs sequential
+    check_future: Future = _EXECUTOR.submit(
+        check_answer, question.get("text", ""), body.user_answer
+    )
+    learner_state_future: Future = _EXECUTOR.submit(get_learner_state, body.user_id)
+
+    check = check_future.result(timeout=20)
+    try:
+        learner_state = learner_state_future.result(timeout=4)
+    except Exception:
+        learner_state = {}
+    learner_ctx = format_learner_context(learner_state)
     is_correct   = check.get("is_correct", False)
     correct_answer = check.get("correct_answer", "")
     explanation  = check.get("explanation", "")
@@ -344,7 +356,8 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
         f"Time taken: {body.time_taken:.0f}s. Hint used: {body.hint_used}. Retries: {body.retries}."
     )
 
-    supermemory_future: Future = _EXECUTOR.submit(
+    # Supermemory write is fire-and-forget — never block the response on it
+    _EXECUTOR.submit(
         write_session_summary,
         body.user_id,
         summary,
@@ -356,12 +369,6 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
         remediation_future = _EXECUTOR.submit(
             trigger_remediation, concept_name, skill_map, learner_ctx
         )
-
-    # Wait for both (remediation dominates; supermemory finishes first quietly)
-    try:
-        supermemory_future.result(timeout=3)
-    except Exception as e:
-        print(f"[Supermemory] write failed (non-fatal): {e}")
 
     remediation = None
     if remediation_future is not None:

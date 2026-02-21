@@ -39,7 +39,7 @@ def get_learner_state(user_id: int) -> dict:
             f"{BASE_URL}/documents",
             headers=_headers(),
             params={"q": f"user_id:{user_id} Attempted", "limit": 10},
-            timeout=10.0,
+            timeout=3.0,
             follow_redirects=True,
         )
         response.raise_for_status()
