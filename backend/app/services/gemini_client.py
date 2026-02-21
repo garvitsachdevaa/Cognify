@@ -234,6 +234,9 @@ Focus on the key concept, formula, or first step they should use.
 
 Rules:
 - ALWAYS wrap any mathematical expression in $...$ for inline math or $$...$$ for display math.
+- Use $$...$$ (display math) for standalone formulas like binomial coefficients, fractions, or combinations — NOT inline $...$.
+- Use \\dbinom instead of \\binom so combinations render full-size: e.g. $$\\dbinom{n}{r}$$.
+- Use \\dfrac instead of \\frac for fractions so they render readable: e.g. $$\\dfrac{n!}{r!(n-r)!}$$.
 - Limit to 2-3 sentences.
 - Do NOT reveal the final numerical answer.
 - Return only the hint text, no preamble."""

@@ -109,9 +109,11 @@ export default function MathText({ text, className }: Props) {
           );
         }
         if (tok.type === "inline") {
+          // Upgrade \binom to \dbinom so it renders full-size in inline mode
+          const math = tok.value.replace(/\\binom\b/g, "\\dbinom");
           return (
             <span key={i}>
-              <InlineMath math={tok.value} />
+              <InlineMath math={math} />
             </span>
           );
         }
