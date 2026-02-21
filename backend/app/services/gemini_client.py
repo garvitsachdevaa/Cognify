@@ -14,6 +14,7 @@ Used for:
 
 import json
 import time
+import base64
 
 import google.generativeai as genai
 
@@ -136,6 +137,60 @@ Math rules:
     except Exception as e:
         print(f"[Gemini] generate_lesson error: {e}")
         return f"Review your notes on {concept_label} and try similar problems to build understanding."
+
+
+def solve_doubt_with_image(
+    image_base64: str,
+    mime_type: str = "image/jpeg",
+    student_attempt: str = "",
+) -> dict:
+    """
+    Solve a doubt from an image (screenshot/photo of a question).
+
+    Uses Gemini Vision to both read the question from the image and solve it.
+    Returns same structure as solve_doubt().
+    """
+    attempt_section = (
+        f"\nStudent's attempt: {student_attempt}" if student_attempt else ""
+    )
+
+    solve_prompt = (
+        f"You are a JEE Maths expert. Look at the question in the image and solve it step-by-step.{attempt_section}\n\n"
+        "Return ONLY valid JSON with this exact structure:\n"
+        "{\n"
+        '  "steps": ["Step 1: ...", "Step 2: ...", "..."],\n'
+        '  "final_answer": "<wrap all math in $...$ inline or $$...$$ display>",\n'
+        '  "sympy_expr": "<sympy-compatible Python expression or empty string>"\n'
+        "}\n\n"
+        "IMPORTANT: ALL math in steps and final_answer MUST be wrapped in $...$ or $$...$$. "
+        "Be precise. Each step must be clear and numbered."
+    )
+
+    try:
+        model = _get_model()
+        image_bytes = base64.b64decode(image_base64)
+        response = model.generate_content([
+            {"mime_type": mime_type, "data": image_bytes},
+            solve_prompt,
+        ])
+        raw = response.text.strip()
+        if "```" in raw:
+            parts = raw.split("```")
+            raw = parts[1].strip()
+            if raw.lower().startswith("json"):
+                raw = raw[4:].strip()
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start != -1 and end > start:
+            raw = raw[start:end]
+        return json.loads(raw)
+    except Exception as e:
+        print(f"[Gemini] solve_doubt_with_image error: {e}")
+        return {
+            "steps": [f"[Error processing image: {e}]"],
+            "final_answer": "",
+            "sympy_expr": "",
+        }
 
 
 def solve_doubt(question_text: str, student_attempt: str = "") -> dict:

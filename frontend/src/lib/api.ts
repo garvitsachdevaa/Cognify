@@ -106,10 +106,19 @@ export interface DoubtResponse {
   model_used?: string;  // "aryabhata-1.0" or "gemini"
 }
 
-export function solveDoubt(user_id: number, question_text: string) {
+export function solveDoubt(
+  user_id: number,
+  question_text: string,
+  image_base64?: string,
+  image_mime_type?: string,
+) {
   return request<DoubtResponse>("/doubt/solve", {
     method: "POST",
-    body: JSON.stringify({ user_id, question_text }),
+    body: JSON.stringify({
+      user_id,
+      question_text,
+      ...(image_base64 ? { image_base64, image_mime_type: image_mime_type ?? "image/jpeg" } : {}),
+    }),
   });
 }
 

@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { solveDoubt, DoubtResponse } from "@/lib/api";
 import MathText from "@/components/MathText";
 
@@ -13,14 +13,65 @@ export default function DoubtChat({ userId }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // Image state
+  const [imagePreview, setImagePreview] = useState<string | null>(null);   // data URL for <img>
+  const [imageBase64, setImageBase64] = useState<string | null>(null);     // pure base64
+  const [imageMime, setImageMime] = useState<string>("image/jpeg");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadImageFile = useCallback((file: File) => {
+    const mime = file.type || "image/jpeg";
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      setImagePreview(dataUrl);
+      // Strip data:<mime>;base64, prefix to get raw base64
+      const b64 = dataUrl.split(",")[1];
+      setImageBase64(b64);
+      setImageMime(mime);
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
+  // Global paste listener — catches Ctrl+V / Cmd+V anywhere on the page
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of Array.from(items)) {
+        if (item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) { loadImageFile(file); e.preventDefault(); }
+          break;
+        }
+      }
+    }
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [loadImageFile]);
+
+  const clearImage = () => {
+    setImagePreview(null);
+    setImageBase64(null);
+    setImageMime("image/jpeg");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const canSubmit = !loading && (!!question.trim() || !!imageBase64);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!question.trim()) return;
+    if (!canSubmit) return;
     setLoading(true);
     setError("");
     setResult(null);
     try {
-      const res = await solveDoubt(userId, question.trim());
+      const res = await solveDoubt(
+        userId,
+        question.trim(),
+        imageBase64 ?? undefined,
+        imageMime,
+      );
       setResult(res);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to solve doubt");
@@ -33,27 +84,86 @@ export default function DoubtChat({ userId }: Props) {
     <div className="space-y-5">
       {/* Input form */}
       <form onSubmit={handleSubmit} className="space-y-3">
+
+        {/* Image upload area */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-medium text-gray-400">
+              Question image <span className="text-gray-600">(optional — paste or upload)</span>
+            </label>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="text-xs text-brand-400 hover:text-brand-300 transition-colors"
+            >
+              + Upload image
+            </button>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) loadImageFile(file);
+            }}
+          />
+          {imagePreview ? (
+            <div className="relative rounded-xl overflow-hidden border border-gray-700/60 bg-gray-900">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={imagePreview}
+                alt="Question screenshot"
+                className="w-full max-h-64 object-contain p-2"
+              />
+              <button
+                type="button"
+                onClick={clearImage}
+                className="absolute top-2 right-2 w-6 h-6 rounded-full bg-gray-900/80 border border-gray-700 text-gray-400 hover:text-white flex items-center justify-center text-xs leading-none"
+                title="Remove image"
+              >
+                ✕
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full h-24 rounded-xl border border-dashed border-gray-700 hover:border-brand-600 bg-gray-900/40 text-gray-500 hover:text-gray-400 text-sm transition-colors flex flex-col items-center justify-center gap-1"
+            >
+              <span className="text-2xl">📷</span>
+              <span>Click to upload or paste a screenshot (Ctrl+V / ⌘V)</span>
+            </button>
+          )}
+        </div>
+
+        {/* Text question */}
         <div>
           <label className="block text-xs font-medium text-gray-400 mb-1.5">
-            Enter your question
+            {imageBase64 ? "Add context (optional)" : "Or type your question"}
           </label>
           <textarea
-            className="input resize-none h-28"
-            placeholder="e.g. Find ∫ x·eˣ dx using integration by parts"
+            className="input resize-none h-24"
+            placeholder={
+              imageBase64
+                ? "e.g. I'm stuck on part (b) specifically…"
+                : "e.g. Find ∫ x·eˣ dx using integration by parts"
+            }
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            required
           />
         </div>
+
         <button
           type="submit"
           className="btn-primary w-full"
-          disabled={loading || !question.trim()}
+          disabled={!canSubmit}
         >
           {loading ? (
             <span className="flex items-center justify-center gap-2">
               <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              Solving…
+              {imageBase64 ? "Reading image & solving…" : "Solving…"}
             </span>
           ) : (
             "Solve with AI ✦"
