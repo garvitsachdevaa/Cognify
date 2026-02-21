@@ -216,10 +216,11 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
         except Exception as e:
             print(f"[Practice] Pinecone error: {e}")
 
-    if not questions:
-        # Nothing in DB or Pinecone — generate fresh questions via Gemini
-        print(f"[Practice] No questions for '{body.topic}' — generating via Gemini...")
-        generated = generate_questions_for_topic(body.topic, n=body.n)
+    if not questions or len(questions) < body.n:
+        # Nothing (or not enough) in DB or Pinecone — generate fresh questions via Gemini
+        needed = body.n - len(questions)
+        print(f"[Practice] Only {len(questions)}/{body.n} questions for '{body.topic}' — generating {needed} more via Gemini...")
+        generated = generate_questions_for_topic(body.topic, n=needed)
         for gq in generated:
             text = gq.get("text", "").strip()
             if not text:

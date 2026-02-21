@@ -237,8 +237,8 @@ export default function QuestionCard({ question, userId, index, total, onResult 
                   result.is_correct && result.skill_delta > 0 ? "text-emerald-400" : "text-red-400"
                 }`}
               >
-                {result.is_correct && result.skill_delta > 0 ? "+" : ""}
-                {result.skill_delta} ELO
+                {result.is_correct && result.skill_delta > 0 ? "+" : "−"}
+                {Math.abs(result.skill_delta)} ELO
               </span>
             )}
           </div>
