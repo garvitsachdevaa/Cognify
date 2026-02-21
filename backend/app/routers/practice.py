@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor, Future
 
 from app import crud
 from app.db import get_db
@@ -20,7 +21,9 @@ from app.services.ingestion import ingest_topic
 from app.services.pinecone_client import query_questions
 from app.services.remediation import should_remediate, trigger_remediation
 from app.services.supermemory import get_learner_state, write_session_summary
-import threading
+
+# Shared thread pool for parallel IO-bound tasks in answer submission
+_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
 router = APIRouter()
 
@@ -265,40 +268,37 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
 @router.post("/answer")
 def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
     """
-    Full flow:
-    1. Validate question + confidence
-    2. Compute CMS
-    3. ELO skill update in Postgres
-    4. Check concept graph for weak prereqs
-    5. Write behavior summary to Supermemory
-    6. Trigger remediation if needed
-    7. Return updated skill + next action
+    Parallel flow to minimise latency:
+      1. Validate + load question  [instant]
+      2. check_answer() via Gemini [1-3s]  ← blocking, needed for everything
+      3. CMS + ELO + DB writes     [instant, sequential]
+      4. PARALLEL:
+           a. write_session_summary() to Supermemory   [~1s]
+           b. trigger_remediation() + generate_lesson() [~3s]
+         → both fire simultaneously, wait with .result()
+      Total: ~2-4s instead of ~6-8s
     """
-    # Validate confidence range
+    # ── Validate ──────────────────────────────────────────────────────────────
     if not 1 <= body.confidence <= 5:
         raise HTTPException(status_code=400, detail="confidence must be 1–5")
 
-    # Verify question exists
     question = crud.get_question_by_id(db, body.question_id)
     if not question:
         raise HTTPException(status_code=404, detail=f"Question {body.question_id} not found")
 
-    # Auto-check the student's answer using Gemini
+    # ── Step 1: Gemini grading (must finish before CMS/ELO) ──────────────────
     check = check_answer(question.get("text", ""), body.user_answer)
-    is_correct = check.get("is_correct", False)
+    is_correct   = check.get("is_correct", False)
     correct_answer = check.get("correct_answer", "")
-    explanation = check.get("explanation", "")
+    explanation  = check.get("explanation", "")
 
-    # Determine concept from question's first subtopic
+    # ── Step 2: fast DB ops (all instant) ─────────────────────────────────────
     subtopics = question.get("subtopics") or []
     if isinstance(subtopics, str):
-        import json
         subtopics = json.loads(subtopics)
     concept_name = subtopics[0] if subtopics else "unknown"
+    concept_id   = _ensure_concept(db, concept_name)
 
-    concept_id = _ensure_concept(db, concept_name)
-
-    # 1. CMS
     cms = compute_cms(
         is_correct=is_correct,
         time_taken=body.time_taken,
@@ -307,7 +307,6 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
         confidence=body.confidence,
     )
 
-    # 2. Record attempt
     crud.record_attempt(
         db,
         user_id=body.user_id,
@@ -320,46 +319,63 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
         cms=cms,
     )
 
-    # 3. ELO skill update
     difficulty = question.get("difficulty", 3)
-    old_skill = get_or_init_skill(db, body.user_id, concept_id)
-    new_skill = update_skill(old_skill, difficulty, cms)
+    old_skill  = get_or_init_skill(db, body.user_id, concept_id)
+    new_skill  = update_skill(old_skill, difficulty, cms)
     persist_skill(db, body.user_id, concept_id, new_skill)
 
-    # 4. Concept graph prereq check
     skill_map = crud.get_all_skills(db, body.user_id)
     skill_map[concept_name] = new_skill
 
-    # 5. Supermemory — write behavior note
-    status = "correct" if is_correct else "incorrect"
+    streak = crud.get_incorrect_streak(db, body.user_id, body.question_id)
+    needs_remediation = should_remediate(cms, streak)
+
+    # ── Step 3: fire Supermemory write + remediation IN PARALLEL ──────────────
+    status  = "correct" if is_correct else "incorrect"
     summary = (
         f"User {body.user_id} attempted '{concept_name}' (difficulty {difficulty}). "
         f"Result: {status}. CMS: {cms:.3f}. Skill updated: {old_skill:.0f} → {new_skill:.0f}."
     )
-    write_session_summary(
+
+    supermemory_future: Future = _EXECUTOR.submit(
+        write_session_summary,
         body.user_id,
         summary,
-        metadata={"concept": concept_name, "cms": str(cms), "is_correct": str(is_correct)},
+        {"concept": concept_name, "cms": str(cms), "is_correct": str(is_correct)},
     )
 
-    # 6. Remediation check
-    streak = crud.get_incorrect_streak(db, body.user_id, body.question_id)
-    remediation = None
-    if should_remediate(cms, streak):
-        remediation = trigger_remediation(concept_name, skill_map)
+    remediation_future: Future | None = None
+    if needs_remediation:
+        remediation_future = _EXECUTOR.submit(
+            trigger_remediation, concept_name, skill_map
+        )
 
+    # Wait for both (remediation dominates; supermemory finishes first quietly)
+    try:
+        supermemory_future.result(timeout=3)
+    except Exception as e:
+        print(f"[Supermemory] write failed (non-fatal): {e}")
+
+    remediation = None
+    if remediation_future is not None:
+        try:
+            remediation = remediation_future.result(timeout=8)
+        except Exception as e:
+            print(f"[Remediation] failed (non-fatal): {e}")
+
+    # ── Step 4: return ─────────────────────────────────────────────────────────
     return {
-        "user_id": body.user_id,
-        "question_id": body.question_id,
-        "concept": concept_name,
-        "is_correct": is_correct,
+        "user_id":       body.user_id,
+        "question_id":   body.question_id,
+        "concept":       concept_name,
+        "is_correct":    is_correct,
         "correct_answer": correct_answer,
-        "explanation": explanation,
-        "cms": cms,
-        "old_skill": old_skill,
-        "new_skill": new_skill,
-        "skill_delta": round(new_skill - old_skill, 2),
-        "remediation": remediation,
+        "explanation":   explanation,
+        "cms":           cms,
+        "old_skill":     old_skill,
+        "new_skill":     new_skill,
+        "skill_delta":   round(new_skill - old_skill, 2),
+        "remediation":   remediation,
         "message": (
             "Correct! Well done!" if is_correct
             else ("Remediation triggered — check the lesson below!" if remediation
