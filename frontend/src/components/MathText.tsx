@@ -24,7 +24,17 @@ const NCR_RE = /\^\{?\d+\}?[CP]_?\{?\d+\}?/g;
 /**
  * Pre-process: if text has NO $ delimiters but DOES contain LaTeX commands
  * or nCr/nPr notation, treat the whole string as a display-math block.
+ * Also strips residual markdown symbols (###, **, __ etc.) from plain text.
  */
+function stripMarkdown(t: string): string {
+  return t
+    .replace(/^#{1,6}\s*/gm, "")          // ### headings
+    .replace(/\*\*([^*]+)\*\*/g, "$1")    // **bold**
+    .replace(/\*([^*]+)\*/g, "$1")        // *italic*
+    .replace(/__([^_]+)__/g, "$1")        // __bold__
+    .replace(/_([^_]+)_/g, "$1");         // _italic_
+}
+
 function preProcess(text: string): string {
   const t = String(text ?? "");
   if (!t.includes("$") && (LATEX_CMD_RE.test(t) || NCR_RE.test(t))) {
@@ -69,7 +79,7 @@ function hasBaremath(s: string): boolean {
 
 /** Split text into alternating plain-text and math tokens. */
 function tokenise(raw: string): Array<{ type: "text" | "block" | "inline"; value: string }> {
-  const text = preProcess(raw);
+  const text = preProcess(stripMarkdown(String(raw ?? "")));
   const tokens: Array<{ type: "text" | "block" | "inline"; value: string }> = [];
   // Match $$...$$ first (block), then $...$ (inline)
   const re = /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/g;

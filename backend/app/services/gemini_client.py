@@ -112,20 +112,24 @@ def generate_lesson(concept: str) -> str:
     """
     Generate a 60-second micro-lesson for the given concept.
 
-    Returns explanation with LaTeX math wrapped in $...$ delimiters.
+    Returns plain-paragraph explanation with LaTeX math in $...$ delimiters.
+    NO markdown formatting (no ##, no **, no bullet dashes).
     """
     concept_label = concept.replace("_", " ")
     prompt = f"""You are a JEE Maths expert tutor. The student is struggling with: {concept_label}
 
-Write a concise 60-second explanation covering:
+Write a concise 60-second explanation in PLAIN PARAGRAPHS (no markdown, no ### headings, no **bold**, no bullet lists). Use blank lines to separate sections.
+
+Cover:
 1. Core idea (2-3 sentences)
-2. Key formula or rule — wrap all math in $...$ for inline or $$...$$ for display
+2. Key formula or rule
 3. One worked example with step-by-step reasoning
 
-Notation rules:
-- Use $^n C_r$ for combinations, $^n P_r$ for permutations (NEVER \\binom)
-- Use $\\dfrac{{a}}{{b}}$ for fractions inside $...$
-- Keep explanations concise and beginner-friendly."""
+Math rules:
+- Wrap ALL math in $...$ for inline or $$...$$ for display math on its own line
+- Use $^n C_r$ for combinations, $^n P_r$ for permutations
+- Use $\\dfrac{{a}}{{b}}$ for fractions
+- NEVER use ### headings, **bold**, or - bullet syntax"""
 
     try:
         return _call_with_retry(prompt)
@@ -193,7 +197,7 @@ def check_answer(question_text: str, user_answer: str) -> dict:
         {
             "is_correct": bool,
             "correct_answer": str,
-            "explanation": str   # brief 1-2 sentence explanation
+            "explanation": str
         }
     """
     prompt = f"""You are a JEE Mathematics expert grading a student's answer.
@@ -201,31 +205,41 @@ def check_answer(question_text: str, user_answer: str) -> dict:
 Question: {question_text}
 Student's answer: {user_answer}
 
-Evaluate whether the student's answer is mathematically correct (accept equivalent forms, e.g. "e^x(x-1)+C" and "(x-1)e^x + C" are the same).
+Evaluate whether the student's answer is mathematically correct (accept equivalent forms).
 
-Return ONLY valid JSON. For LaTeX in string values, double-escape backslashes (e.g. write \\\\dfrac, \\\\cos so the JSON is valid).
-
-{{
-  "is_correct": true or false,
-  "correct_answer": "<concise answer; use double-escaped LaTeX if needed, e.g. \\\\dfrac{{1}}{{1+\\\\cos x}}>",
-  "explanation": "<1-2 sentences explaining correctness or the mistake; plain text preferred>"
-}}"""
-
-    def _parse(raw: str) -> dict:
-        if "```" in raw:
-            parts = raw.split("```")
-            raw = parts[1].strip()
-            if raw.lower().startswith("json"):
-                raw = raw[4:].strip()
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start != -1 and end > start:
-            raw = raw[start:end]
-        return json.loads(raw)
+Respond on EXACTLY 3 lines in this format (no extra text, no JSON, no markdown):
+CORRECT: yes
+ANSWER: <concise correct answer in plain text, e.g. 12 or 1/(1+cosx) or sqrt(169-25)>
+REASON: <one plain-text sentence explaining why correct or what was wrong>"""
 
     try:
-        raw = _call_with_retry(prompt)
-        return _parse(raw)
+        raw = _call_with_retry(prompt).strip()
+        result = {"is_correct": False, "correct_answer": "", "explanation": ""}
+        for line in raw.splitlines():
+            line = line.strip()
+            if line.upper().startswith("CORRECT:"):
+                val = line.split(":", 1)[1].strip().lower()
+                result["is_correct"] = val in ("yes", "true", "correct")
+            elif line.upper().startswith("ANSWER:"):
+                result["correct_answer"] = line.split(":", 1)[1].strip()
+            elif line.upper().startswith("REASON:"):
+                result["explanation"] = line.split(":", 1)[1].strip()
+        # Fallback: if nothing parsed, attempt lenient JSON parse
+        if not result["correct_answer"] and "{" in raw:
+            try:
+                start = raw.find("{")
+                end = raw.rfind("}") + 1
+                # Escape bare backslashes before parsing
+                candidate = raw[start:end]
+                import re as _re
+                candidate = _re.sub(r'(?<!\\)\\(?![\\"nrtbf/u])', r'\\\\', candidate)
+                parsed = json.loads(candidate)
+                result["is_correct"] = bool(parsed.get("is_correct", False))
+                result["correct_answer"] = str(parsed.get("correct_answer", ""))
+                result["explanation"] = str(parsed.get("explanation", ""))
+            except Exception:
+                pass
+        return result
     except Exception as e:
         print(f"[Gemini] check_answer error: {e}")
         return {
