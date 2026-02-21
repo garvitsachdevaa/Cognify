@@ -13,6 +13,7 @@ Used for:
 """
 
 import json
+import time
 
 import google.generativeai as genai
 
@@ -31,6 +32,21 @@ def _get_model():
         genai.configure(api_key=settings.gemini_api_key)
         _model = genai.GenerativeModel("gemini-flash-latest")
     return _model
+
+
+def _call_with_retry(prompt: str, max_retries: int = 3) -> str:
+    """Call Gemini with simple exponential-backoff retry on transient errors."""
+    for attempt in range(max_retries):
+        try:
+            model = _get_model()
+            response = model.generate_content(prompt)
+            return response.text.strip()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            wait = 2 ** attempt  # 1 s, 2 s …
+            print(f"[Gemini] attempt {attempt + 1} failed ({e}), retrying in {wait}s")
+            time.sleep(wait)
 
 
 def get_embedding(text: str) -> list[float]:
@@ -96,24 +112,26 @@ def generate_lesson(concept: str) -> str:
     """
     Generate a 60-second micro-lesson for the given concept.
 
-    Returns plain text explanation + 2 scaffolded example problems.
+    Returns explanation with LaTeX math wrapped in $...$ delimiters.
     """
-    prompt = f"""You are a JEE Maths expert tutor. The student is struggling with: {concept}
+    concept_label = concept.replace("_", " ")
+    prompt = f"""You are a JEE Maths expert tutor. The student is struggling with: {concept_label}
 
 Write a concise 60-second explanation covering:
 1. Core idea (2-3 sentences)
-2. Key formula or rule
-3. One worked example
+2. Key formula or rule — wrap all math in $...$ for inline or $$...$$ for display
+3. One worked example with step-by-step reasoning
 
-Keep it focused, clear, and beginner-friendly. Plain text only."""
+Notation rules:
+- Use $^n C_r$ for combinations, $^n P_r$ for permutations (NEVER \\binom)
+- Use $\\dfrac{{a}}{{b}}$ for fractions inside $...$
+- Keep explanations concise and beginner-friendly."""
 
     try:
-        model = _get_model()
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        return _call_with_retry(prompt)
     except Exception as e:
         print(f"[Gemini] generate_lesson error: {e}")
-        return f"[Error generating lesson for {concept}]"
+        return f"Review your notes on {concept_label} and try similar problems to build understanding."
 
 
 def solve_doubt(question_text: str, student_attempt: str = "") -> dict:
@@ -146,18 +164,13 @@ IMPORTANT: ALL mathematical expressions — in both steps and final_answer — M
 Be precise. Each step must be clear and numbered."""
 
     try:
-        model = _get_model()
-        response = model.generate_content(prompt)
-        raw = response.text.strip()
+        raw = _call_with_retry(prompt)
         # Strip markdown code fences if present
         if "```" in raw:
-            # Extract content between first ``` and last ```
             parts = raw.split("```")
-            # parts[1] is content inside the first pair of fences
             raw = parts[1].strip()
             if raw.lower().startswith("json"):
                 raw = raw[4:].strip()
-        # Find JSON object boundaries as fallback
         start = raw.find("{")
         end = raw.rfind("}") + 1
         if start != -1 and end > start:
@@ -190,17 +203,15 @@ Student's answer: {user_answer}
 
 Evaluate whether the student's answer is mathematically correct (accept equivalent forms, e.g. "e^x(x-1)+C" and "(x-1)e^x + C" are the same).
 
-Return ONLY valid JSON with this exact structure:
+Return ONLY valid JSON. IMPORTANT: In JSON string values use ONLY plain ASCII text — no LaTeX backslashes, no curly braces. Write fractions as a/b, sets as {{1,2,3}}, powers as x^2.
+
 {{
   "is_correct": true or false,
-  "correct_answer": "<the correct answer as a concise expression>",
-  "explanation": "<one or two sentences explaining why the answer is correct or what the student got wrong>"
+  "correct_answer": "<concise plain-text answer, e.g. 28 or x+1 or 3/4>",
+  "explanation": "<1-2 plain-text sentences — no LaTeX>"
 }}"""
 
-    try:
-        model = _get_model()
-        response = model.generate_content(prompt)
-        raw = response.text.strip()
+    def _parse(raw: str) -> dict:
         if "```" in raw:
             parts = raw.split("```")
             raw = parts[1].strip()
@@ -211,12 +222,16 @@ Return ONLY valid JSON with this exact structure:
         if start != -1 and end > start:
             raw = raw[start:end]
         return json.loads(raw)
+
+    try:
+        raw = _call_with_retry(prompt)
+        return _parse(raw)
     except Exception as e:
         print(f"[Gemini] check_answer error: {e}")
         return {
             "is_correct": False,
             "correct_answer": "",
-            "explanation": "Could not evaluate answer.",
+            "explanation": "Answer could not be auto-graded — check the correct answer above.",
         }
 
 
@@ -242,9 +257,7 @@ Rules:
 - Return only the hint text, no preamble."""
 
     try:
-        model = _get_model()
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        return _call_with_retry(prompt)
     except Exception as e:
         print(f"[Gemini] generate_hint error: {e}")
         return "Think about the key formula or identity relevant to this topic and try applying it step by step."
@@ -275,9 +288,7 @@ Return ONLY a JSON array with exactly {n} objects, each with:
 No extra text, no markdown fences, just the raw JSON array."""
 
     try:
-        model = _get_model()
-        response = model.generate_content(prompt)
-        raw = response.text.strip()
+        raw = _call_with_retry(prompt)
         if "```" in raw:
             parts = raw.split("```")
             raw = parts[1].strip()

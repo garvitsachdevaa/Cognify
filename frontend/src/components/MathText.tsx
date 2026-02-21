@@ -110,15 +110,17 @@ export default function MathText({ text, className }: Props) {
     <span className={className}>
       {tokens.map((tok, i) => {
         if (tok.type === "block") {
+          // Convert \binom{n}{r} / \dbinom{n}{r}  →  ^{n}C_{r}  for unambiguous notation
+          const bmath = tok.value.replace(/\\d?binom\{([^}]+)\}\{([^}]+)\}/g, "^{$1}C_{$2}");
           return (
             <span key={i} className="block my-1 overflow-x-auto">
-              <BlockMath math={tok.value} />
+              <BlockMath math={bmath} />
             </span>
           );
         }
         if (tok.type === "inline") {
-          // Upgrade \binom to \dbinom so it renders full-size in inline mode
-          const math = tok.value.replace(/\\binom\b/g, "\\dbinom");
+          // Convert \binom{n}{r} / \dbinom{n}{r}  →  ^{n}C_{r}  for unambiguous notation
+          const math = tok.value.replace(/\\d?binom\{([^}]+)\}\{([^}]+)\}/g, "^{$1}C_{$2}");
           return (
             <span key={i}>
               <InlineMath math={math} />

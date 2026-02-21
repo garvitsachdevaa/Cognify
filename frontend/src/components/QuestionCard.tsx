@@ -262,7 +262,7 @@ export default function QuestionCard({ question, userId, index, total, onResult 
           )}
 
           {/* Explanation */}
-          {result.explanation && (
+          {result.explanation && !result.explanation.startsWith("Answer could not be auto-graded") && (
             <div className="bg-gray-800/40 rounded-xl p-3 border border-brand-800/40 space-y-1">
               <p className="text-xs text-brand-400 font-medium uppercase tracking-wide">
                 Explanation
@@ -274,7 +274,7 @@ export default function QuestionCard({ question, userId, index, total, onResult 
           )}
 
           {/* Remediation lesson */}
-          {result.remediation && (
+          {result.remediation && !result.remediation.lesson.startsWith("Review your notes") && (
             <div className="bg-amber-950/30 rounded-xl p-3 border border-amber-800/40 space-y-2">
               <p className="text-xs text-amber-400 font-medium uppercase tracking-wide">
                 📚 Lesson to review
