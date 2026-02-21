@@ -15,6 +15,7 @@ Used for:
 import json
 import time
 import base64
+import os
 
 import google.generativeai as genai
 
@@ -23,6 +24,7 @@ from app.config import settings
 # Lazy initialization
 _model = None
 _embed_model = "models/gemini-embedding-001"
+_MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
 
 
 def _get_model():
@@ -31,7 +33,7 @@ def _get_model():
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY not set")
         genai.configure(api_key=settings.gemini_api_key)
-        _model = genai.GenerativeModel("gemini-flash-latest")
+        _model = genai.GenerativeModel(_MODEL_NAME)
     return _model
 
 
