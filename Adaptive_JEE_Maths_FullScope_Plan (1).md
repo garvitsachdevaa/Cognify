@@ -197,7 +197,7 @@ System:
 
 # 8️⃣ Doubt Resolution
 
-Using Aryabhata or strong math-capable LLM.
+Using Gemini (strong math-capable LLM).
 
 Prompt format:
 
