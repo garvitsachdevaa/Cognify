@@ -55,12 +55,19 @@ export function startPractice(user_id: number, topic: string, n = 5) {
   });
 }
 
+export interface RemediationData {
+  weak_prereq: string | null;
+  target_concept: string;
+  lesson: string;
+  guided_questions: Array<{ text: string; difficulty: number }>;
+}
+
 export interface AnswerResponse {
   cms: number;
   old_skill: number;
   new_skill: number;
   skill_delta: number;
-  remediation: string | null;
+  remediation: RemediationData | null;
   message: string;
   is_correct: boolean;
   correct_answer: string;

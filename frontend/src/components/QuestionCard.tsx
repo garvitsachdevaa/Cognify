@@ -234,10 +234,10 @@ export default function QuestionCard({ question, userId, index, total, onResult 
             {result.skill_delta !== 0 && (
               <span
                 className={`ml-auto font-mono font-bold ${
-                  result.skill_delta > 0 ? "text-emerald-400" : "text-red-400"
+                  result.is_correct && result.skill_delta > 0 ? "text-emerald-400" : "text-red-400"
                 }`}
               >
-                {result.skill_delta > 0 ? "+" : ""}
+                {result.is_correct && result.skill_delta > 0 ? "+" : ""}
                 {result.skill_delta} ELO
               </span>
             )}
@@ -275,13 +275,28 @@ export default function QuestionCard({ question, userId, index, total, onResult 
 
           {/* Remediation lesson */}
           {result.remediation && (
-            <div className="bg-amber-950/30 rounded-xl p-3 border border-amber-800/40 space-y-1">
+            <div className="bg-amber-950/30 rounded-xl p-3 border border-amber-800/40 space-y-2">
               <p className="text-xs text-amber-400 font-medium uppercase tracking-wide">
-                📖 Lesson to review
+                📚 Lesson to review
+                {result.remediation.weak_prereq && (
+                  <span className="ml-2 normal-case text-amber-500/70 font-normal">
+                    — {result.remediation.weak_prereq.replace(/_/g, " ")}
+                  </span>
+                )}
               </p>
               <div className="text-gray-200 text-sm leading-relaxed">
-                <MathText text={result.remediation} />
+                <MathText text={result.remediation.lesson} />
               </div>
+              {result.remediation.guided_questions?.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  <p className="text-xs text-amber-500/70 font-medium">Practice these:</p>
+                  {result.remediation.guided_questions.map((q, i) => (
+                    <div key={i} className="text-xs text-gray-400 bg-gray-800/60 rounded-lg px-3 py-2">
+                      <MathText text={q.text} />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
