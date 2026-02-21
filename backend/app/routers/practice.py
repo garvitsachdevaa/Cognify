@@ -7,13 +7,15 @@ Practice router — core session management.
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+import hashlib
+import json
 
 from app import crud
 from app.db import get_db
 from app.services.cms import compute_cms
 from app.services.concept_graph import get_all_concepts, load_graph
 from app.services.elo import get_or_init_skill, persist_skill, update_skill
-from app.services.gemini_client import get_embedding, check_answer, generate_hint
+from app.services.gemini_client import get_embedding, check_answer, generate_hint, generate_questions_for_topic
 from app.services.ingestion import ingest_topic
 from app.services.pinecone_client import query_questions
 from app.services.remediation import should_remediate, trigger_remediation
@@ -213,6 +215,34 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
                     break
         except Exception as e:
             print(f"[Practice] Pinecone error: {e}")
+
+    if not questions:
+        # Nothing in DB or Pinecone — generate fresh questions via Gemini
+        print(f"[Practice] No questions for '{body.topic}' — generating via Gemini...")
+        generated = generate_questions_for_topic(body.topic, n=body.n)
+        for gq in generated:
+            text = gq.get("text", "").strip()
+            if not text:
+                continue
+            diff = max(1, min(5, int(gq.get("difficulty", 3))))
+            h = hashlib.sha256(text.strip().lower().encode()).hexdigest()
+            db_id = crud.insert_question(
+                db,
+                text_=text,
+                subtopics=[body.topic],
+                difficulty=diff,
+                source_url="gemini_generated",
+                text_hash=h,
+                embedding_id="",
+            )
+            if db_id not in result_ids:
+                questions.append({
+                    "id": db_id,
+                    "text": text,
+                    "subtopics": [body.topic],
+                    "difficulty": diff,
+                })
+                result_ids.add(db_id)
 
     if not questions:
         raise HTTPException(

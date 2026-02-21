@@ -73,7 +73,8 @@ export default function PracticePage() {
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center space-y-3">
           <div className="w-10 h-10 border-4 border-brand-500 border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-gray-400 text-sm">Loading questions for {topicLabel}…</p>
+          <p className="text-gray-300 text-sm font-medium">Fetching questions for {topicLabel}…</p>
+          <p className="text-gray-500 text-xs">First visit may take a few seconds</p>
         </div>
       </div>
     );

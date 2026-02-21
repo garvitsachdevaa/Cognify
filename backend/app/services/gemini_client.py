@@ -248,3 +248,45 @@ Rules:
     except Exception as e:
         print(f"[Gemini] generate_hint error: {e}")
         return "Think about the key formula or identity relevant to this topic and try applying it step by step."
+
+
+def generate_questions_for_topic(topic: str, n: int = 5) -> list[dict]:
+    """
+    Generate n JEE-level practice questions for a topic on the fly.
+    Called as a fallback when DB + Pinecone both return empty for a new topic.
+
+    Returns list of dicts: [{"text": str, "difficulty": int}, ...]
+    """
+    prompt = f"""You are an expert JEE Mathematics problem setter.
+Generate exactly {n} JEE-level practice questions for the topic: **{topic.replace('_', ' ')}**.
+
+Each question must:
+- Be a clear, self-contained problem (no sub-parts a/b/c)
+- Require actual calculation or proof, not just recall
+- Use KaTeX-compatible LaTeX wrapped in $...$ for inline or $$...$$ for display math
+- Use \\dbinom{{{{n}}}}{{{{r}}}} for combinations and \\dfrac for fractions
+- Vary in difficulty (mix of straightforward and tricky)
+
+Return ONLY a JSON array with exactly {n} objects, each with:
+  "text": "<the question string with LaTeX>",
+  "difficulty": <integer 1-5>
+
+No extra text, no markdown fences, just the raw JSON array."""
+
+    try:
+        model = _get_model()
+        response = model.generate_content(prompt)
+        raw = response.text.strip()
+        if "```" in raw:
+            parts = raw.split("```")
+            raw = parts[1].strip()
+            if raw.lower().startswith("json"):
+                raw = raw[4:].strip()
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start == -1 or end == 0:
+            return []
+        return json.loads(raw[start:end])[:n]
+    except Exception as e:
+        print(f"[Gemini] generate_questions_for_topic error: {e}")
+        return []
