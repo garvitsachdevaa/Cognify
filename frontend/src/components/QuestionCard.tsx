@@ -250,7 +250,7 @@ export default function QuestionCard({ question, userId, index, total, onResult 
           </div>
 
           {/* Correct answer */}
-          {result.correct_answer && (
+          {result.correct_answer ? (
             <div className="bg-gray-800/40 rounded-xl p-3 border border-emerald-800/40 space-y-1">
               <p className="text-xs text-emerald-500 font-medium uppercase tracking-wide">
                 Correct answer
@@ -259,10 +259,15 @@ export default function QuestionCard({ question, userId, index, total, onResult 
                 <MathText text={result.correct_answer} />
               </div>
             </div>
-          )}
+          ) : !result.is_correct ? (
+            <div className="bg-gray-800/40 rounded-xl p-3 border border-gray-700/40 space-y-1">
+              <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Correct answer</p>
+              <p className="text-gray-500 text-sm italic">Could not auto-grade — check your notes or use Ask Doubt</p>
+            </div>
+          ) : null}
 
           {/* Explanation */}
-          {result.explanation && !result.explanation.startsWith("Answer could not be auto-graded") && (
+          {result.explanation && (
             <div className="bg-gray-800/40 rounded-xl p-3 border border-brand-800/40 space-y-1">
               <p className="text-xs text-brand-400 font-medium uppercase tracking-wide">
                 Explanation
@@ -274,7 +279,7 @@ export default function QuestionCard({ question, userId, index, total, onResult 
           )}
 
           {/* Remediation lesson */}
-          {result.remediation && !result.remediation.lesson.startsWith("Review your notes") && (
+          {result.remediation && (
             <div className="bg-amber-950/30 rounded-xl p-3 border border-amber-800/40 space-y-2">
               <p className="text-xs text-amber-400 font-medium uppercase tracking-wide">
                 📚 Lesson to review

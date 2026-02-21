@@ -203,12 +203,12 @@ Student's answer: {user_answer}
 
 Evaluate whether the student's answer is mathematically correct (accept equivalent forms, e.g. "e^x(x-1)+C" and "(x-1)e^x + C" are the same).
 
-Return ONLY valid JSON. IMPORTANT: In JSON string values use ONLY plain ASCII text — no LaTeX backslashes, no curly braces. Write fractions as a/b, sets as {{1,2,3}}, powers as x^2.
+Return ONLY valid JSON. For LaTeX in string values, double-escape backslashes (e.g. write \\\\dfrac, \\\\cos so the JSON is valid).
 
 {{
   "is_correct": true or false,
-  "correct_answer": "<concise plain-text answer, e.g. 28 or x+1 or 3/4>",
-  "explanation": "<1-2 plain-text sentences — no LaTeX>"
+  "correct_answer": "<concise answer; use double-escaped LaTeX if needed, e.g. \\\\dfrac{{1}}{{1+\\\\cos x}}>",
+  "explanation": "<1-2 sentences explaining correctness or the mistake; plain text preferred>"
 }}"""
 
     def _parse(raw: str) -> dict:

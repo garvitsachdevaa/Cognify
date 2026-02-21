@@ -127,7 +127,7 @@ export default function PracticePage() {
               <div className="bg-amber-900/30 border border-amber-700/50 rounded-xl p-4 text-left mt-2">
                 <p className="text-amber-300 text-xs font-semibold mb-2">📖 Remediation tip</p>
                 <p className="text-amber-100 text-sm leading-relaxed">
-                  {results.find((r) => r.remediation)!.remediation}
+                  {results.find((r) => r.remediation)!.remediation!.lesson}
                 </p>
               </div>
             )}
