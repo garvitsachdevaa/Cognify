@@ -235,8 +235,8 @@ Focus on the key concept, formula, or first step they should use.
 Rules:
 - ALWAYS wrap any mathematical expression in $...$ for inline math or $$...$$ for display math.
 - Use $$...$$ (display math) for standalone formulas like binomial coefficients, fractions, or combinations — NOT inline $...$.
-- Use \\dbinom instead of \\binom so combinations render full-size: e.g. $$\\dbinom{{n}}{{r}}$$.
-- Use \\dfrac instead of \\frac for fractions so they render readable: e.g. $$\\dfrac{{n!}}{{r!(n-r)!}}$$.
+- Use $^nC_r$ notation for combinations (e.g. $^8C_2$) and $^nP_r$ for permutations (e.g. $^8P_2$) — never use \\binom or \\dbinom.
+- Use \\dfrac instead of \\frac for fractions so they render readable.
 - Limit to 2-3 sentences.
 - Do NOT reveal the final numerical answer.
 - Return only the hint text, no preamble."""
@@ -264,7 +264,8 @@ Each question must:
 - Be a clear, self-contained problem (no sub-parts a/b/c)
 - Require actual calculation or proof, not just recall
 - Use KaTeX-compatible LaTeX wrapped in $...$ for inline or $$...$$ for display math
-- Use \\dbinom{{{{n}}}}{{{{r}}}} for combinations and \\dfrac for fractions
+- Use $^nC_r$ notation for combinations (e.g. $^8C_2$) and $^nP_r$ for permutations — never use \\binom.
+- Use \\dfrac instead of \\frac for fractions.
 - Vary in difficulty (mix of straightforward and tricky)
 
 Return ONLY a JSON array with exactly {n} objects, each with:

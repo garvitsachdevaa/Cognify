@@ -16,15 +16,18 @@ interface Props {
 
 // Matches common LaTeX math commands that indicate a segment should be rendered as math
 const LATEX_CMD_RE =
-  /\\(?:frac|sqrt|int|oint|iint|sum|prod|lim|log|ln|sin|cos|tan|cot|sec|csc|infty|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega|nabla|partial|forall|exists|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|rightarrow|leftarrow|Rightarrow|Leftarrow|to|implies|iff|ldots|cdots|binom|overline|underline|hat|vec|bar|tilde|widehat|mathbb|mathbf|mathrm|text|left|right|begin|end)\b/;
+  /\\(?:frac|dfrac|sqrt|int|oint|iint|sum|prod|lim|log|ln|sin|cos|tan|cot|sec|csc|infty|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega|nabla|partial|forall|exists|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|rightarrow|leftarrow|Rightarrow|Leftarrow|to|implies|iff|ldots|cdots|binom|dbinom|overline|underline|hat|vec|bar|tilde|widehat|mathbb|mathbf|mathrm|text|left|right|begin|end)\b/;
+
+// Matches bare ^nCr / ^nPr notation outside $ delimiters, e.g. ^8C_2 or ^{10}P_3
+const NCR_RE = /\^\{?\d+\}?[CP]_?\{?\d+\}?/g;
 
 /**
- * Pre-process: if text has NO $ delimiters but DOES contain LaTeX commands,
- * treat the whole string as a display-math block.
- * This fixes Gemini returning bare LaTeX like `\frac{n(A)}{n(S)}`.
+ * Pre-process: if text has NO $ delimiters but DOES contain LaTeX commands
+ * or nCr/nPr notation, treat the whole string as a display-math block.
  */
 function preProcess(text: string): string {
-  if (!text.includes("$") && LATEX_CMD_RE.test(text)) {
+  if (!text.includes("$") && (LATEX_CMD_RE.test(text) || NCR_RE.test(text))) {
+    NCR_RE.lastIndex = 0; // reset after test
     return `$$${text}$$`;
   }
   return text;
@@ -38,11 +41,9 @@ function preProcess(text: string): string {
 function splitBareLatex(
   text: string,
 ): Array<{ type: "text" | "inline"; value: string }> {
-  // Match runs that start from a LaTeX command through its arguments and
-  // any adjacent math characters (=, +, -, ^, _, digits, parens, spaces-in-braces)
-  // We match: optional leading math chars + \cmd + any {...} groups + trailing math chars
+  // Match bare LaTeX commands OR bare ^nCr / ^nPr notation
   const mathRe =
-    /([A-Za-z0-9()=+\-*/^_.,'|\\]*\\[A-Za-z]+(?:\{(?:[^{}]|\{[^{}]*\})*\})*[A-Za-z0-9()=+\-*/^_.,'|]*)/g;
+    /([A-Za-z0-9()=+\-*/^_.,'|\\]*\\[A-Za-z]+(?:\{(?:[^{}]|\{[^{}]*\})*\})*[A-Za-z0-9()=+\-*/^_.,'|]*|\^\{?\d+\}?[CP]_?\{?\d+\}?)/g;
   const out: Array<{ type: "text" | "inline"; value: string }> = [];
   let last = 0;
   let m: RegExpExecArray | null;
@@ -59,6 +60,12 @@ function splitBareLatex(
   return out.length > 1 ? out : [{ type: "text", value: text }]; // no split found
 }
 
+/** Returns true if the string contains bare LaTeX or bare nCr/nPr notation */
+function hasBaremath(s: string): boolean {
+  NCR_RE.lastIndex = 0;
+  return LATEX_CMD_RE.test(s) || NCR_RE.test(s);
+}
+
 /** Split text into alternating plain-text and math tokens. */
 function tokenise(raw: string): Array<{ type: "text" | "block" | "inline"; value: string }> {
   const text = preProcess(raw);
@@ -70,8 +77,8 @@ function tokenise(raw: string): Array<{ type: "text" | "block" | "inline"; value
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) {
       const plain = text.slice(last, m.index);
-      // Second pass: detect bare LaTeX inside non-delimited text
-      if (LATEX_CMD_RE.test(plain)) {
+      // Second pass: detect bare LaTeX or ^nCr/^nPr inside non-delimited text
+      if (hasBaremath(plain)) {
         tokens.push(...splitBareLatex(plain));
       } else {
         tokens.push({ type: "text", value: plain });
@@ -87,7 +94,7 @@ function tokenise(raw: string): Array<{ type: "text" | "block" | "inline"; value
   }
   if (last < text.length) {
     const tail = text.slice(last);
-    if (LATEX_CMD_RE.test(tail)) {
+    if (hasBaremath(tail)) {
       tokens.push(...splitBareLatex(tail));
     } else {
       tokens.push({ type: "text", value: tail });
