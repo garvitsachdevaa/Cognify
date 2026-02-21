@@ -110,7 +110,7 @@ Do not include any explanation, only the JSON."""
         return {"subtopics": ["unknown"], "difficulty": 3}
 
 
-def generate_lesson(concept: str) -> str:
+def generate_lesson(concept: str, learner_context: str = "") -> str:
     """
     Generate a 60-second micro-lesson for the given concept.
 
@@ -118,9 +118,15 @@ def generate_lesson(concept: str) -> str:
     NO markdown formatting (no ##, no **, no bullet dashes).
     """
     concept_label = concept.replace("_", " ")
-    prompt = f"""You are a JEE Maths expert tutor. The student is struggling with: {concept_label}
+    context_block = (
+        f"\nLearner context (tailor your explanation accordingly): {learner_context}"
+        if learner_context else ""
+    )
+    prompt = f"""You are a JEE Maths expert tutor speaking directly to your student.{context_block}
+Your student is struggling with: {concept_label}
 
-Write a concise 60-second explanation in PLAIN PARAGRAPHS (no markdown, no ### headings, no **bold**, no bullet lists). Use blank lines to separate sections.
+Write a concise 60-second explanation addressing them as \"you\" (not \"the student\").
+Use PLAIN PARAGRAPHS (no markdown, no ### headings, no **bold**, no bullet lists). Use blank lines to separate sections.
 
 Cover:
 1. Core idea (2-3 sentences)
@@ -245,9 +251,9 @@ Be precise. Each step must be clear and numbered."""
         }
 
 
-def check_answer(question_text: str, user_answer: str) -> dict:
+def check_answer(question_text: str, user_answer: str, learner_context: str = "") -> dict:
     """
-    Check whether a student's answer to a JEE maths question is correct.
+    Check whether a user's answer to a JEE maths question is correct.
 
     Returns:
         {
@@ -256,17 +262,22 @@ def check_answer(question_text: str, user_answer: str) -> dict:
             "explanation": str
         }
     """
-    prompt = f"""You are a JEE Mathematics expert grading a student's answer.
+    context_block = (
+        f"\nLearner context (use to personalise your explanation tone): {learner_context}"
+        if learner_context else ""
+    )
+    prompt = f"""You are a JEE Mathematics expert grading an answer.{context_block}
 
 Question: {question_text}
-Student's answer: {user_answer}
+Your answer: {user_answer}
 
-Evaluate whether the student's answer is mathematically correct (accept equivalent forms).
+Evaluate whether the answer is mathematically correct (accept equivalent forms).
+Speak directly to the learner using "you" (not "the student").
 
 Respond on EXACTLY 3 lines in this format (no extra text, no JSON, no markdown):
 CORRECT: yes
 ANSWER: <concise correct answer in plain text, e.g. 12 or 1/(1+cosx) or sqrt(169-25)>
-REASON: <one plain-text sentence explaining why correct or what was wrong>"""
+REASON: <one plain-text sentence explaining why correct or what you missed>"""
 
     try:
         raw = _call_with_retry(prompt).strip()
@@ -305,16 +316,20 @@ REASON: <one plain-text sentence explaining why correct or what was wrong>"""
         }
 
 
-def generate_hint(question_text: str) -> str:
+def generate_hint(question_text: str, learner_context: str = "") -> str:
     """
     Generate a helpful hint for a JEE maths question WITHOUT giving away the answer.
     Returns a single hint string (plain text + KaTeX-wrapped math).
     """
-    prompt = f"""You are a JEE Mathematics tutor. A student needs a hint for this problem:
+    context_block = (
+        f"\nLearner context: {learner_context}" if learner_context else ""
+    )
+    prompt = f"""You are a JEE Mathematics tutor speaking directly to your student.{context_block}
+Your student needs a hint for this problem:
 
 {question_text}
 
-Give ONE clear, helpful hint that guides the student toward the solution without giving away the final answer.
+Give ONE clear, helpful hint addressing them as \"you\" that guides them toward the solution without giving away the final answer.
 Focus on the key concept, formula, or first step they should use.
 
 Rules:
@@ -333,14 +348,18 @@ Rules:
         return "Think about the key formula or identity relevant to this topic and try applying it step by step."
 
 
-def generate_questions_for_topic(topic: str, n: int = 5) -> list[dict]:
+def generate_questions_for_topic(topic: str, n: int = 5, learner_context: str = "") -> list[dict]:
     """
     Generate n JEE-level practice questions for a topic on the fly.
     Called as a fallback when DB + Pinecone both return empty for a new topic.
 
     Returns list of dicts: [{"text": str, "difficulty": int}, ...]
     """
-    prompt = f"""You are an expert JEE Mathematics problem setter.
+    context_block = (
+        f"\nLearner context (use to target question difficulty and style): {learner_context}"
+        if learner_context else ""
+    )
+    prompt = f"""You are an expert JEE Mathematics problem setter.{context_block}
 Generate exactly {n} JEE-level practice questions for the topic: **{topic.replace('_', ' ')}**.
 
 Each question must:

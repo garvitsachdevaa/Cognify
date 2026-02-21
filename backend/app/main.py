@@ -46,5 +46,6 @@ app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 
 
 @app.get("/", tags=["Health"])
+@app.get("/health", tags=["Health"])
 def health():
     return {"status": "ok", "service": "Cognify API v0.1.0"}

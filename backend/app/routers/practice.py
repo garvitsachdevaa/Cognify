@@ -20,7 +20,7 @@ from app.services.gemini_client import get_embedding, check_answer, generate_hin
 from app.services.ingestion import ingest_topic
 from app.services.pinecone_client import query_questions
 from app.services.remediation import should_remediate, trigger_remediation
-from app.services.supermemory import get_learner_state, write_session_summary
+from app.services.supermemory import get_learner_state, write_session_summary, format_learner_context
 
 # Shared thread pool for parallel IO-bound tasks in answer submission
 _EXECUTOR = ThreadPoolExecutor(max_workers=4)
@@ -152,7 +152,7 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
                 ingest_topic(topic, n=10)
             except Exception as exc:
                 print(f"[BG Ingest] {topic}: {exc}")
-        threading.Thread(target=_bg_ingest, args=(body.topic,), daemon=True).start()
+        _EXECUTOR.submit(_bg_ingest, body.topic)
 
     # 5. Adaptive DB fetch — difficulty-banded, unseen-first, randomised
     db_questions = crud.get_adaptive_questions(
@@ -175,6 +175,9 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
             limit=body.n - len(db_questions),
         )
         db_questions.extend(extra)
+
+    # Format learner context for Gemini (used in question generation fallback)
+    learner_ctx = format_learner_context(learner_state)
 
     questions = [
         {
@@ -223,7 +226,7 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
         # Nothing (or not enough) in DB or Pinecone — generate fresh questions via Gemini
         needed = body.n - len(questions)
         print(f"[Practice] Only {len(questions)}/{body.n} questions for '{body.topic}' — generating {needed} more via Gemini...")
-        generated = generate_questions_for_topic(body.topic, n=needed)
+        generated = generate_questions_for_topic(body.topic, n=needed, learner_context=learner_ctx)
         for gq in generated:
             text = gq.get("text", "").strip()
             if not text:
@@ -287,7 +290,10 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"Question {body.question_id} not found")
 
     # ── Step 1: Gemini grading (must finish before CMS/ELO) ──────────────────
-    check = check_answer(question.get("text", ""), body.user_answer)
+    # Pull learner memory to personalise grading explanation
+    learner_state = get_learner_state(body.user_id)
+    learner_ctx   = format_learner_context(learner_state)
+    check = check_answer(question.get("text", ""), body.user_answer, learner_context=learner_ctx)
     is_correct   = check.get("is_correct", False)
     correct_answer = check.get("correct_answer", "")
     explanation  = check.get("explanation", "")
@@ -333,8 +339,9 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
     # ── Step 3: fire Supermemory write + remediation IN PARALLEL ──────────────
     status  = "correct" if is_correct else "incorrect"
     summary = (
-        f"User {body.user_id} attempted '{concept_name}' (difficulty {difficulty}). "
-        f"Result: {status}. CMS: {cms:.3f}. Skill updated: {old_skill:.0f} → {new_skill:.0f}."
+        f"Attempted '{concept_name}' (difficulty {difficulty}). "
+        f"Result: {status}. CMS score: {cms:.3f}. Skill: {old_skill:.0f} → {new_skill:.0f}. "
+        f"Time taken: {body.time_taken:.0f}s. Hint used: {body.hint_used}. Retries: {body.retries}."
     )
 
     supermemory_future: Future = _EXECUTOR.submit(
@@ -347,7 +354,7 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
     remediation_future: Future | None = None
     if needs_remediation:
         remediation_future = _EXECUTOR.submit(
-            trigger_remediation, concept_name, skill_map
+            trigger_remediation, concept_name, skill_map, learner_ctx
         )
 
     # Wait for both (remediation dominates; supermemory finishes first quietly)

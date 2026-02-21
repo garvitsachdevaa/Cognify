@@ -27,8 +27,8 @@ def get_learner_state(user_id: int) -> dict:
     """
     Retrieve the learner's behavioral memory from Supermemory.
 
-    Returns a dict with keys like:
-      weak_concepts, slow_solver, hint_dependency
+    Searches for past session summaries and derives:
+      weak_concepts, hint_dependency from stored metadata.
     Falls back to empty defaults if no memory exists yet.
     """
     if not settings.supermemory_api_key:
@@ -38,18 +38,42 @@ def get_learner_state(user_id: int) -> dict:
         response = httpx.get(
             f"{BASE_URL}/documents",
             headers=_headers(),
-            params={"q": f"learner_profile user:{user_id}", "limit": 1},
+            params={"q": f"user_id:{user_id} Attempted", "limit": 10},
             timeout=10.0,
             follow_redirects=True,
         )
         response.raise_for_status()
         data = response.json()
-        results = data.get("results", [])
-        if results:
-            # Supermemory stores free-text; we use a simple structured convention
-            # TODO: parse actual Supermemory response format
-            return results[0].get("metadata", _default_state())
-        return _default_state()
+        results = data.get("results", data.get("documents", []))
+
+        if not results:
+            return _default_state()
+
+        # Mine metadata from stored session summaries
+        weak_concepts: set[str] = set()
+        hint_count = 0
+        total = 0
+        for r in results:
+            meta = r.get("metadata", {})
+            if meta.get("is_correct") == "False":
+                concept = meta.get("concept", "")
+                if concept and concept != "unknown":
+                    weak_concepts.add(concept.replace("_", " "))
+            if meta.get("hint_used") == "True":
+                hint_count += 1
+            total += 1
+
+        hint_dep = "low"
+        if total > 0 and hint_count / total > 0.5:
+            hint_dep = "high"
+        elif total > 0 and hint_count / total > 0.25:
+            hint_dep = "medium"
+
+        return {
+            "weak_concepts": list(weak_concepts)[:5],  # top 5 weak areas
+            "slow_solver": False,
+            "hint_dependency": hint_dep,
+        }
     except Exception as e:
         print(f"[Supermemory] get_learner_state error: {e}")
         return _default_state()
@@ -100,3 +124,55 @@ def _default_state() -> dict:
         "slow_solver": False,
         "hint_dependency": "low",
     }
+
+
+def format_learner_context(state: dict) -> str:
+    """
+    Convert a learner state dict into a plain-English paragraph
+    that can be injected into any Gemini prompt to personalise it.
+    Returns an empty string if no meaningful state exists.
+    """
+    parts = []
+    weak = state.get("weak_concepts", [])
+    if weak:
+        parts.append(f"The learner struggles with: {', '.join(weak)}.")
+    if state.get("slow_solver"):
+        parts.append("They tend to solve slowly — prefer step-by-step explanations.")
+    hint_dep = state.get("hint_dependency", "low")
+    if hint_dep in ("medium", "high"):
+        parts.append(f"They have {hint_dep} hint dependency — guide them to think independently.")
+    return " ".join(parts)
+
+
+def get_learner_context_string(user_id: int) -> str:
+    """
+    Fetch Supermemory for a user and return a prompt-ready string.
+    Returns empty string if no memory or on error.
+    """
+    if not settings.supermemory_api_key:
+        return ""
+    try:
+        response = httpx.get(
+            f"{BASE_URL}/memories/search",
+            headers=_headers(),
+            params={"q": f"user {user_id} learning behaviour weak concepts", "limit": 3},
+            timeout=8.0,
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+        data = response.json()
+        results = data.get("results", data.get("documents", []))
+        if not results:
+            return ""
+        # Concatenate the most relevant memory snippets (up to 400 chars total)
+        snippets = []
+        total = 0
+        for r in results:
+            content = r.get("content", r.get("text", ""))
+            if content and total < 400:
+                snippets.append(content[:200])
+                total += len(content)
+        return " | ".join(snippets) if snippets else ""
+    except Exception as e:
+        print(f"[Supermemory] get_learner_context_string error: {e}")
+        return ""

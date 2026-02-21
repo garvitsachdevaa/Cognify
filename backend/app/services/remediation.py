@@ -28,6 +28,7 @@ def should_remediate(cms: float, incorrect_streak: int) -> bool:
 def trigger_remediation(
     concept: str,
     skill_map: dict[str, float],
+    learner_context: str = "",
 ) -> dict:
     """
     Orchestrate remediation flow.
@@ -43,7 +44,7 @@ def trigger_remediation(
     weak_prereq = find_weak_prerequisite(concept, skill_map)
     target = weak_prereq if weak_prereq else concept
 
-    lesson = generate_lesson(target)
+    lesson = generate_lesson(target, learner_context=learner_context)
 
     try:
         emb = get_embedding(target.replace("_", " "))
