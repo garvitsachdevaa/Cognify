@@ -19,6 +19,7 @@ export default function PracticePage() {
   const [current, setCurrent] = useState(0);
   const [results, setResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchingMore, setFetchingMore] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
   const [userId, setUserId] = useState<number | null>(null);
@@ -34,13 +35,33 @@ export default function PracticePage() {
       .finally(() => setLoading(false));
   }, [topic, router]);
 
-  function handleResult(res: AnswerResponse) {
-    const newResults = [...results, { ...res, questionIndex: current }];
-    setResults(newResults);
-    if (current + 1 >= questions.length) {
-      setDone(true);
+  async function handleResult(res: AnswerResponse) {
+    const updatedResults = [...results, { ...res, questionIndex: current }];
+    setResults(updatedResults);
+
+    const nextIndex = current + 1;
+
+    if (nextIndex < questions.length) {
+      // Still have questions in the current batch
+      setCurrent(nextIndex);
     } else {
-      setCurrent(current + 1);
+      // Batch exhausted — fetch the next batch silently
+      const user = getUser();
+      if (!user) { setDone(true); return; }
+      setFetchingMore(true);
+      try {
+        const more = await startPractice(user.user_id, topic, 5);
+        if (more.questions && more.questions.length > 0) {
+          setQuestions(more.questions);
+          setCurrent(0);
+        } else {
+          setDone(true);
+        }
+      } catch {
+        setDone(true);
+      } finally {
+        setFetchingMore(false);
+      }
     }
   }
 
@@ -82,10 +103,10 @@ export default function PracticePage() {
     );
   }
 
-  // ── Session summary ──
+  // ── Session summary (only shown when user clicks "Finish") ──
   if (done) {
-    const correct = results.filter((r) => r.skill_delta > 0).length;
-    const avgCms = results.reduce((s, r) => s + r.cms, 0) / results.length;
+    const correct = results.filter((r) => r.is_correct).length;
+    const avgCms = results.length > 0 ? results.reduce((s, r) => s + r.cms, 0) / results.length : 0;
     const lastSkill = results[results.length - 1]?.new_skill ?? 1000;
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
@@ -113,11 +134,15 @@ export default function PracticePage() {
 
           <div className="flex gap-3">
             <button
-              onClick={() => { setCurrent(0); setResults([]); setDone(false); setLoading(true);
-                getUser() && startPractice(getUser()!.user_id, topic, 5)
-                  .then((r) => setQuestions(r.questions))
-                  .catch((e) => setError(e.message))
-                  .finally(() => setLoading(false));
+              onClick={() => {
+                setCurrent(0); setResults([]); setDone(false); setLoading(true);
+                const user = getUser();
+                if (user) {
+                  startPractice(user.user_id, topic, 5)
+                    .then((r) => setQuestions(r.questions))
+                    .catch((e) => setError(e.message))
+                    .finally(() => setLoading(false));
+                }
               }}
               className="btn-primary flex-1"
             >
@@ -141,35 +166,59 @@ export default function PracticePage() {
           ← Dashboard
         </Link>
         <span className="text-gray-400 text-sm font-medium">{topicLabel}</span>
-        {userId && (
-          <Link href="/doubt" className="text-brand-400 hover:text-brand-300 text-sm">
-            Ask doubt
-          </Link>
-        )}
+        <div className="flex items-center gap-3">
+          {results.length > 0 && (
+            <button
+              onClick={() => setDone(true)}
+              className="text-gray-500 hover:text-gray-300 text-sm"
+            >
+              Finish
+            </button>
+          )}
+          {userId && (
+            <Link href="/doubt" className="text-brand-400 hover:text-brand-300 text-sm">
+              Ask doubt
+            </Link>
+          )}
+        </div>
       </div>
 
-      {/* Progress bar */}
+      {/* Progress bar — shows questions answered this session */}
       <div className="max-w-2xl mx-auto w-full mb-5">
         <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
           <div
             className="h-full bg-brand-500 rounded-full transition-all duration-500"
-            style={{ width: `${((current) / questions.length) * 100}%` }}
+            style={{ width: results.length > 0 ? `${Math.min((results.length % 10) * 10, 100)}%` : "0%" }}
           />
+        </div>
+        <div className="flex justify-between text-xs text-gray-600 mt-1">
+          <span>{results.length} answered</span>
+          <span>{results.filter((r) => r.is_correct).length} correct</span>
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto w-full flex-1">
-        {userId && (
-          <QuestionCard
-            key={questions[current].id}
-            question={questions[current]}
-            userId={userId}
-            index={current}
-            total={questions.length}
-            onResult={handleResult}
-          />
-        )}
-      </div>
+      {/* Loading next batch overlay */}
+      {fetchingMore ? (
+        <div className="max-w-2xl mx-auto w-full flex-1 flex items-center justify-center">
+          <div className="text-center space-y-3">
+            <div className="w-8 h-8 border-4 border-brand-500 border-t-transparent rounded-full animate-spin mx-auto" />
+            <p className="text-gray-400 text-sm">Loading next question…</p>
+          </div>
+        </div>
+      ) : (
+        <div className="max-w-2xl mx-auto w-full flex-1">
+          {userId && questions[current] && (
+            <QuestionCard
+              key={`${questions[current].id}-${current}-${results.length}`}
+              question={questions[current]}
+              userId={userId}
+              index={results.length}
+              total={results.length + questions.length - current}
+              onResult={handleResult}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -182,3 +231,5 @@ function StatBox({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
+
