@@ -214,7 +214,8 @@ def get_adaptive_questions(
                 params[f"ex{i}"] = eid
         rows = db.execute(
             text(f"""
-                SELECT id, text, subtopics, difficulty, source_url
+                SELECT id, text, subtopics, difficulty, source_url,
+                       question_type, options, correct_option, correct_answer
                 FROM questions
                 WHERE subtopics::text ILIKE :s
                   AND difficulty BETWEEN :d_min AND :d_max
@@ -224,13 +225,30 @@ def get_adaptive_questions(
             """),
             params,
         ).fetchall()
-        return [dict(r._mapping) for r in rows]
+        out = []
+        for r in rows:
+            row = dict(r._mapping)
+            # Parse options JSON string if present
+            if row.get("options") and isinstance(row["options"], str):
+                try:
+                    row["options"] = _json.loads(row["options"])
+                except Exception:
+                    row["options"] = None
+            out.append(row)
+        return out
 
     results = _fetch(diff_min, diff_max)
-    # If the difficulty band is empty, widen to any difficulty
-    if not results:
-        results = _fetch(1, 5)
-    return results
+    # If the difficulty band is empty or insufficient, top up from any difficulty
+    if len(results) < limit:
+        extra = _fetch(1, 5)
+        seen = {r["id"] for r in results}
+        for r in extra:
+            if r["id"] not in seen:
+                results.append(r)
+                seen.add(r["id"])
+            if len(results) >= limit:
+                break
+    return results[:limit]
 
 
 def count_questions_by_subtopic(db: Session, subtopic: str) -> int:

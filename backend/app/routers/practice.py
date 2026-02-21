@@ -140,6 +140,7 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
       3. Cache Pinecone results in DB (dedup by hash)
       4. Gemini generation as last resort if Tavily also fails
     """
+    # NOTE: No pre-seeded questions — all questions come from Pinecone/Tavily/Gemini
     all_concepts = get_all_concepts()
     if body.topic not in all_concepts:
         raise HTTPException(
@@ -224,24 +225,27 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
             ids.add(db_id)
         return qs, ids
 
-    # 5. First Pinecone query
-    questions, result_ids = _cache_and_format(_pinecone_query(body.n), set())
+    # 5. Query Pinecone
+    pinecone_hits = _pinecone_query(body.n)
+    questions, result_ids = _cache_and_format(pinecone_hits, seen_ids)
 
-    # 6. Not enough in Pinecone → run Tavily ingest SYNCHRONOUSLY, then re-query
+    # 6. If Pinecone insufficient → Tavily ingest → re-query Pinecone
     if len(questions) < body.n:
-        print(f"[Practice] Only {len(questions)}/{body.n} in Pinecone for '{body.topic}' — running sync ingest...")
+        print(f"[Practice] Pinecone returned {len(questions)}/{body.n} — running Tavily ingest for '{body.topic}'...")
         try:
-            ingest_topic(body.topic, n=15)
+            ingest_topic(body.topic, n=20)
         except Exception as e:
-            print(f"[Practice] Ingest failed (non-fatal): {e}")
-        more, result_ids = _cache_and_format(_pinecone_query(body.n), result_ids)
-        for q in more:
-            if q["id"] not in result_ids or q not in questions:
+            print(f"[Practice] Tavily ingest error (non-fatal): {e}")
+        # Re-query Pinecone after ingest
+        new_hits = _pinecone_query(body.n)
+        extra_qs, result_ids = _cache_and_format(new_hits, result_ids)
+        # Add only new questions
+        existing_ids = {q["id"] for q in questions}
+        for q in extra_qs:
+            if q["id"] not in existing_ids and len(questions) < body.n:
                 questions.append(q)
-            if len(questions) >= body.n:
-                break
 
-    # 7. Still not enough → Gemini generation as absolute last resort
+    # 7. Gemini generation — Pinecone + Tavily both insufficient
     learner_state: dict = {}
     if len(questions) < body.n:
         try:
@@ -476,7 +480,7 @@ def adaptive_start(body: AdaptiveStartRequest, db: Session = Depends(get_db)):
             break
 
     if not chosen_topic:
-        raise HTTPException(status_code=404, detail="No questions found in DB. Run seed first.")
+        raise HTTPException(status_code=404, detail="No questions available yet. Start any topic to trigger ingestion.")
 
     # Reuse start_session logic
     return start_session(

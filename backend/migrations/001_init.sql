@@ -63,3 +63,14 @@ CREATE TABLE IF NOT EXISTS attempts (
 CREATE INDEX IF NOT EXISTS idx_user_skill_lookup ON user_skill(user_id, concept_id);
 CREATE INDEX IF NOT EXISTS idx_attempts_user     ON attempts(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_questions_hash    ON questions(text_hash);
+
+-- Add MCQ/numerical fields to existing questions table (idempotent)
+ALTER TABLE questions
+    ADD COLUMN IF NOT EXISTS question_type  TEXT DEFAULT 'numerical'
+        CHECK (question_type IN ('mcq', 'numerical')),
+    ADD COLUMN IF NOT EXISTS options        TEXT DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS correct_option TEXT DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS correct_answer TEXT DEFAULT NULL;
+
+-- Remove confidence from attempts if it exists (idempotent)
+ALTER TABLE attempts DROP COLUMN IF EXISTS confidence;
