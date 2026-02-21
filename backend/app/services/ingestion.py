@@ -39,13 +39,18 @@ def ingest_topic(topic: str, n: int = 10) -> list[dict]:
 
     for query in queries:
         try:
-            results = tavily.search(query=query, max_results=3)
+            results = tavily.search(
+                query=query,
+                max_results=5,
+                include_raw_content=False,  # summary content is enough + faster
+            )
             for result in results.get("results", []):
                 url = result.get("url", "")
-                content = result.get("content", "")
+                # Use full content if available, fall back to snippet
+                content = result.get("content", "") or result.get("snippet", "")
                 extracted = _extract_questions_from_text(content, url)
                 raw_questions.extend(extracted)
-                if len(raw_questions) >= n * 2:  # fetch extra to account for deduplication
+                if len(raw_questions) >= n * 2:
                     break
         except Exception as e:
             print(f"[Ingestion] Tavily search error for '{query}': {e}")
@@ -91,7 +96,6 @@ def ingest_topic(topic: str, n: int = 10) -> list[dict]:
         # Upsert into Pinecone
         upsert_question(question_id, embedding, metadata)
 
-        # TODO: INSERT into Postgres questions table
         ingested.append(metadata)
 
         if len(ingested) >= n:
@@ -114,30 +118,74 @@ def _build_queries(topic: str) -> list[str]:
 def _extract_questions_from_text(content: str, source_url: str) -> list[dict]:
     """
     Heuristic extraction of question-like sentences from raw text content.
-    Looks for lines that contain math indicators or end with '?'.
+    Splits on both newlines and sentence boundaries for richer extraction.
     """
+    import re
+
     questions = []
-    lines = content.split("\n")
 
-    math_indicators = ["∫", "∑", "lim(", "lim_", "dx", "dy", "sin(", "cos(", "tan(",
-                       "log(", "ln(", "matrix", "vector", "→", "≤", "≥", "$\\"]
+    # Split on lines first, then also on sentence boundaries within long lines
+    raw_lines = content.split("\n")
+    candidates: list[str] = []
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+        if len(line) > 200:
+            parts = re.split(r'(?<=[.?])\s+', line)
+            candidates.extend([p.strip() for p in parts if p.strip()])
+        else:
+            candidates.append(line)
 
-    junk_phrases = (
-        "the document", "this document", "pdf includes", "pdf contains",
-        "detailing various", "series of", "includes different types",
-        "collection of", "set of questions", "the following questions",
+    math_indicators = [
+        "∫", "∑", "∏", "√", "→", "≤", "≥", "≠", "∞",
+        "$", "^2", "^3", "lim(", "lim_", "dx", "dy", "dz",
+        "sin(", "cos(", "tan(", "cot(", "sec(", "log(", "ln(", "f(x)",
+        "matrix", "determinant", "vector",
+        "eccentricity", "foci", "focus", "ellipse", "parabola", "hyperbola",
+        "chord", "tangent", "asymptote", "directrix",
+        "integral", "derivative", "differentia", "integra",
+        "polynomial", "quadratic", "roots", "coefficient",
+        "complex number", "modulus", "argument",
+        "probability", "binomial", "permutation", "combination",
+        "progression", "sequence", "series",
+    ]
+
+    question_starters = (
+        "find", "evaluate", "calculate", "compute", "prove", "show", "determine",
+        "if ", "let ", "for ", "given", "solve", "integrate", "differentiate",
+        "a ", "an ", "the ", "two ", "three ", "suppose", "consider", "from ",
+        "which", "what", "how", "when", "using", "without", "in a ", "p(",
     )
 
-    for line in lines:
-        line = line.strip()
-        if len(line) < 30 or len(line) > 450:
+    junk_phrases = (
+        "the document contains", "this document", "pdf includes", "pdf contains",
+        "detailing various", "includes different types", "collection of",
+        "set of questions", "click here", "download", "subscribe",
+        "all rights reserved", "the following questions",
+    )
+
+    seen: set[str] = set()
+    for cand in candidates:
+        cand = cand.strip()
+        if len(cand) < 20 or len(cand) > 600:
             continue
-        line_lower = line.lower()
-        # Skip article/document description sentences
-        if any(p in line_lower for p in junk_phrases):
+        lower = cand.lower()
+        if any(p in lower for p in junk_phrases):
             continue
-        is_question = line.endswith("?") or any(ind in line for ind in math_indicators)
-        if is_question:
-            questions.append({"text": line, "source_url": source_url})
+        key = lower[:60]
+        if key in seen:
+            continue
+        if cand.endswith("?"):
+            seen.add(key)
+            questions.append({"text": cand, "source_url": source_url})
+            continue
+        if any(lower.startswith(s) for s in question_starters):
+            seen.add(key)
+            questions.append({"text": cand, "source_url": source_url})
+            continue
+        if any(ind in cand for ind in math_indicators):
+            seen.add(key)
+            questions.append({"text": cand, "source_url": source_url})
 
     return questions

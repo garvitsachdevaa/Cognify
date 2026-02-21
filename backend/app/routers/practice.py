@@ -57,7 +57,7 @@ def _elo_to_difficulty(elo: float) -> tuple[int, int]:
 
 
 # Low-stock threshold — trigger background ingest when unseen count drops below this
-_LOW_STOCK = 3
+# (removed: ingest is now synchronous for empty topics — see start_session)
 
 
 class AnswerRequest(BaseModel):
@@ -135,14 +135,12 @@ def _ensure_concept(db: Session, concept_name: str) -> int:
 @router.post("/start")
 def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
     """
-    Full flow:
-    1. Get learner state from Supermemory
-    2. Get skill vector from Postgres
-    3. Get concept embedding → query Pinecone for matching questions
-    4. If not enough questions → ingest from web
-    5. Return question set
+    Pinecone-first flow — no hardcoded/seeded questions:
+      1. Query Pinecone for existing questions on this topic
+      2. If insufficient → run Tavily ingest SYNCHRONOUSLY → re-query Pinecone
+      3. Cache Pinecone results in DB (dedup by hash)
+      4. Gemini generation as last resort if Tavily also fails
     """
-    # Validate concept
     all_concepts = get_all_concepts()
     if body.topic not in all_concepts:
         raise HTTPException(
@@ -150,130 +148,113 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
             detail=f"Unknown topic '{body.topic}'. Valid topics: {all_concepts[:10]}..."
         )
 
-    # 1. Learner state from Supermemory — run in background while DB work proceeds
+    # 1. Learner state (background — only needed for Gemini fallback)
     learner_state_future: Future = _EXECUTOR.submit(get_learner_state, body.user_id)
 
-    # 2. Skill from Postgres — determines difficulty band
+    # 2. Skill + difficulty band
     concept_id = _ensure_concept(db, body.topic)
     skill = get_or_init_skill(db, body.user_id, concept_id)
     diff_min, diff_max = _elo_to_difficulty(skill)
 
-    # 3. IDs the user has already seen for this topic → exclude from selection
-    seen_ids_list = crud.get_seen_question_ids(db, body.user_id, body.topic)
-    seen_ids: set[int] = set(seen_ids_list)
+    # 3. Seen question IDs — exclude from this session
+    seen_ids: set[int] = set(crud.get_seen_question_ids(db, body.user_id, body.topic))
 
-    # 4. Low-stock check → fire background ingest so future sessions have fresh Qs
-    total_in_db = crud.count_questions_by_subtopic(db, body.topic)
-    unseen_count = total_in_db - len(seen_ids)
-    if unseen_count < _LOW_STOCK:
-        def _bg_ingest(topic: str) -> None:
-            try:
-                ingest_topic(topic, n=10)
-            except Exception as exc:
-                print(f"[BG Ingest] {topic}: {exc}")
-        _EXECUTOR.submit(_bg_ingest, body.topic)
-
-    # 5. Adaptive DB fetch — difficulty-banded, unseen-first, randomised
-    db_questions = crud.get_adaptive_questions(
-        db,
-        subtopic=body.topic,
-        exclude_ids=seen_ids_list,
-        diff_min=diff_min,
-        diff_max=diff_max,
-        limit=body.n,
-    )
-
-    # If not enough unseen Qs, top up with already-seen ones (still randomised)
-    if len(db_questions) < body.n:
-        extra = crud.get_adaptive_questions(
-            db,
-            subtopic=body.topic,
-            exclude_ids=[q["id"] for q in db_questions],  # avoid duplicates in this batch
-            diff_min=diff_min,
-            diff_max=diff_max,
-            limit=body.n - len(db_questions),
-        )
-        db_questions.extend(extra)
-
-    # Resolve learner state (only needed for Gemini fallback — was running in background)
+    # 4. Get topic embedding for Pinecone query
     try:
-        learner_state = learner_state_future.result(timeout=4)
-    except Exception:
-        learner_state = {}
-    learner_ctx = format_learner_context(learner_state)
+        query_emb = get_embedding(body.topic.replace("_", " "))
+    except Exception as e:
+        print(f"[Practice] Embedding error: {e}")
+        query_emb = None
 
-    questions = [
-        {
-            "id": q["id"],
-            "text": q["text"],
-            "subtopics": q["subtopics"] if isinstance(q["subtopics"], list) else [],
-            "difficulty": int(q["difficulty"]),
-        }
-        for q in db_questions
-        if _is_valid_question(q["text"])  # filter junk at serve time
-    ]
-    result_ids = {q["id"] for q in questions}
-
-    # 6. Still short? Pull from Pinecone (semantic similarity)
-    if len(questions) < body.n:
+    def _pinecone_query(n: int) -> list[dict]:
+        if not query_emb:
+            return []
         try:
-            query_emb = get_embedding(body.topic.replace("_", " "))
-            pinecone_hits = query_questions(
-                subtopic=body.topic,
-                query_embedding=query_emb,
-                n=(body.n - len(questions)) * 2,
-            )
-            for ph in (pinecone_hits or []):
+            return query_questions(subtopic=body.topic, query_embedding=query_emb, n=n * 2) or []
+        except Exception as e:
+            print(f"[Practice] Pinecone query error: {e}")
+            return []
+
+    def _cache_and_format(hits: list[dict], existing_ids: set[int]) -> tuple[list[dict], set[int]]:
+        """Insert Pinecone hits into DB as cache, return valid unseen questions."""
+        qs: list[dict] = []
+        ids = set(existing_ids)
+        for ph in hits:
+            text = ph.get("text", "").strip()
+            if not text or not _is_valid_question(text):
+                continue
+            try:
                 db_id = crud.insert_question(
                     db,
-                    text_=ph["text"],
+                    text_=text,
                     subtopics=ph.get("subtopics", [body.topic]),
                     difficulty=int(ph.get("difficulty", 3)),
                     source_url=ph.get("source_url", ""),
-                    text_hash=ph["text_hash"],
+                    text_hash=ph.get("text_hash", hashlib.sha256(text.encode()).hexdigest()),
                     embedding_id=ph.get("question_id", ""),
                 )
-                if db_id not in result_ids and _is_valid_question(ph["text"]):
-                    questions.append({
-                        "id": db_id,
-                        "text": ph["text"],
-                        "subtopics": ph.get("subtopics", [body.topic]),
-                        "difficulty": int(ph.get("difficulty", 3)),
-                    })
-                    result_ids.add(db_id)
-                if len(questions) >= body.n:
-                    break
-        except Exception as e:
-            print(f"[Practice] Pinecone error: {e}")
+            except Exception:
+                continue
+            if db_id in seen_ids or db_id in ids:
+                continue
+            qs.append({
+                "id": db_id,
+                "text": text,
+                "subtopics": ph.get("subtopics", [body.topic]),
+                "difficulty": int(ph.get("difficulty", 3)),
+            })
+            ids.add(db_id)
+        return qs, ids
 
-    if not questions or len(questions) < body.n:
-        # Nothing (or not enough) in DB or Pinecone — generate fresh questions via Gemini
+    # 5. First Pinecone query
+    questions, result_ids = _cache_and_format(_pinecone_query(body.n), set())
+
+    # 6. Not enough in Pinecone → run Tavily ingest SYNCHRONOUSLY, then re-query
+    if len(questions) < body.n:
+        print(f"[Practice] Only {len(questions)}/{body.n} in Pinecone for '{body.topic}' — running sync ingest...")
+        try:
+            ingest_topic(body.topic, n=15)
+        except Exception as e:
+            print(f"[Practice] Ingest failed (non-fatal): {e}")
+        more, result_ids = _cache_and_format(_pinecone_query(body.n), result_ids)
+        for q in more:
+            if q["id"] not in result_ids or q not in questions:
+                questions.append(q)
+            if len(questions) >= body.n:
+                break
+
+    # 7. Still not enough → Gemini generation as absolute last resort
+    learner_state: dict = {}
+    if len(questions) < body.n:
+        try:
+            learner_state = learner_state_future.result(timeout=4)
+        except Exception:
+            pass
+        learner_ctx = format_learner_context(learner_state)
         needed = body.n - len(questions)
-        print(f"[Practice] Only {len(questions)}/{body.n} questions for '{body.topic}' — generating {needed} more via Gemini...")
+        print(f"[Practice] Gemini generating {needed} questions for '{body.topic}'...")
         generated = generate_questions_for_topic(body.topic, n=needed, learner_context=learner_ctx)
         for gq in generated:
             text = gq.get("text", "").strip()
-            if not text:
+            if not text or not _is_valid_question(text):
                 continue
             diff = max(1, min(5, int(gq.get("difficulty", 3))))
             h = hashlib.sha256(text.strip().lower().encode()).hexdigest()
-            db_id = crud.insert_question(
-                db,
-                text_=text,
-                subtopics=[body.topic],
-                difficulty=diff,
-                source_url="gemini_generated",
-                text_hash=h,
-                embedding_id="",
-            )
+            try:
+                db_id = crud.insert_question(
+                    db, text_=text, subtopics=[body.topic], difficulty=diff,
+                    source_url="gemini_generated", text_hash=h, embedding_id="",
+                )
+            except Exception:
+                continue
             if db_id not in result_ids:
-                questions.append({
-                    "id": db_id,
-                    "text": text,
-                    "subtopics": [body.topic],
-                    "difficulty": diff,
-                })
+                questions.append({"id": db_id, "text": text, "subtopics": [body.topic], "difficulty": diff})
                 result_ids.add(db_id)
+    else:
+        try:
+            learner_state = learner_state_future.result(timeout=4)
+        except Exception:
+            pass
 
     if not questions:
         raise HTTPException(
