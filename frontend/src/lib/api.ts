@@ -62,27 +62,30 @@ export interface AnswerResponse {
   skill_delta: number;
   remediation: string | null;
   message: string;
+  is_correct: boolean;
+  correct_answer: string;
+  explanation: string;
 }
 
 export function submitAnswer(
   user_id: number,
   question_id: number,
-  is_correct: boolean,
+  user_answer: string,
   time_taken: number,
-  confidence: number,
   retries = 0,
-  hint_used = false
+  hint_used = false,
+  confidence = 3
 ) {
   return request<AnswerResponse>("/practice/answer", {
     method: "POST",
     body: JSON.stringify({
       user_id,
       question_id,
-      is_correct,
+      user_answer,
       time_taken,
-      confidence,
       retries,
       hint_used,
+      confidence,
     }),
   });
 }

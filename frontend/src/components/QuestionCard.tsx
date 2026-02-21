@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { Question, AnswerResponse, submitAnswer } from "@/lib/api";
+import MathText from "@/components/MathText";
 
 interface Props {
   question: Question;
@@ -26,15 +27,23 @@ const DIFF_COLORS: Record<number, string> = {
 };
 
 export default function QuestionCard({ question, userId, index, total, onResult }: Props) {
-  const [confidence, setConfidence] = useState(3);
+  const [userAnswer, setUserAnswer] = useState("");
   const [hintUsed, setHintUsed] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [result, setResult] = useState<AnswerResponse | null>(null);
   const startRef = useRef(Date.now());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Start timer
+  // Reset state and restart timer when question changes
   useEffect(() => {
+    setUserAnswer("");
+    setHintUsed(false);
+    setElapsed(0);
+    setSubmitting(false);
+    setSubmitted(false);
+    setResult(null);
     startRef.current = Date.now();
     timerRef.current = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
@@ -44,7 +53,8 @@ export default function QuestionCard({ question, userId, index, total, onResult 
     };
   }, [question.id]);
 
-  async function handleAnswer(isCorrect: boolean) {
+  async function handleSubmit() {
+    if (!userAnswer.trim() || submitting) return;
     if (timerRef.current) clearInterval(timerRef.current);
     setSubmitting(true);
     const timeTaken = Math.floor((Date.now() - startRef.current) / 1000);
@@ -52,22 +62,28 @@ export default function QuestionCard({ question, userId, index, total, onResult 
       const res = await submitAnswer(
         userId,
         question.id,
-        isCorrect,
+        userAnswer.trim(),
         timeTaken,
-        confidence,
         0,
-        hintUsed
+        hintUsed,
+        3
       );
-      onResult(res);
+      setResult(res);
+      setSubmitted(true);
     } catch {
-      onResult({
+      const fallback: AnswerResponse = {
         cms: 0,
         old_skill: 1000,
         new_skill: 1000,
         skill_delta: 0,
         remediation: null,
         message: "Could not record attempt.",
-      });
+        is_correct: false,
+        correct_answer: "",
+        explanation: "Server error — could not evaluate your answer.",
+      };
+      setResult(fallback);
+      setSubmitted(true);
     } finally {
       setSubmitting(false);
     }
@@ -105,71 +121,140 @@ export default function QuestionCard({ question, userId, index, total, onResult 
       </div>
 
       {/* Question text */}
-      <div className="bg-gray-800/50 rounded-xl p-4 text-gray-100 text-base leading-relaxed whitespace-pre-wrap border border-gray-700/50">
-        {question.text}
+      <div className="bg-gray-800/50 rounded-xl p-4 text-gray-100 text-base leading-relaxed border border-gray-700/50">
+        <MathText text={question.text} />
       </div>
 
-      {/* Hint toggle */}
-      <label className="flex items-center gap-2.5 cursor-pointer select-none w-fit">
-        <div
-          onClick={() => setHintUsed(!hintUsed)}
-          className={`w-10 h-5 rounded-full relative transition-colors ${
-            hintUsed ? "bg-amber-500" : "bg-gray-700"
-          }`}
-        >
+      {!submitted ? (
+        <>
+          {/* Hint toggle */}
+          <label className="flex items-center gap-2.5 cursor-pointer select-none w-fit">
+            <div
+              onClick={() => setHintUsed(!hintUsed)}
+              className={`w-10 h-5 rounded-full relative transition-colors ${
+                hintUsed ? "bg-amber-500" : "bg-gray-700"
+              }`}
+            >
+              <div
+                className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                  hintUsed ? "translate-x-5" : "translate-x-0.5"
+                }`}
+              />
+            </div>
+            <span className="text-sm text-gray-400">
+              {hintUsed ? "✦ Hint used (reduces score)" : "Use hint"}
+            </span>
+          </label>
+
+          {/* Answer input */}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+              Your Answer
+            </label>
+            <textarea
+              value={userAnswer}
+              onChange={(e) => setUserAnswer(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSubmit();
+              }}
+              placeholder="Type your answer here… (Ctrl+Enter to submit)"
+              rows={4}
+              className="w-full bg-gray-800/70 border border-gray-700 rounded-xl px-4 py-3 text-gray-100 text-sm placeholder-gray-600 resize-none focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/40 transition-colors"
+            />
+          </div>
+
+          {/* Submit button */}
+          <button
+            onClick={handleSubmit}
+            disabled={!userAnswer.trim() || submitting}
+            className="w-full py-3 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+          >
+            {submitting ? (
+              <>
+                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Checking…
+              </>
+            ) : (
+              "Submit Answer →"
+            )}
+          </button>
+        </>
+      ) : result ? (
+        /* ── Result panel ── */
+        <div className="space-y-4">
+          {/* Verdict badge */}
           <div
-            className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-              hintUsed ? "translate-x-5" : "translate-x-0.5"
+            className={`flex items-center gap-2 px-4 py-3 rounded-xl font-semibold text-sm border ${
+              result.is_correct
+                ? "bg-emerald-900/40 border-emerald-700/60 text-emerald-300"
+                : "bg-red-900/40 border-red-700/60 text-red-300"
             }`}
-          />
-        </div>
-        <span className="text-sm text-gray-400">
-          {hintUsed ? "✦ Hint used (reduces score)" : "Use hint"}
-        </span>
-      </label>
+          >
+            <span className="text-lg">{result.is_correct ? "✓" : "✗"}</span>
+            {result.is_correct ? "Correct!" : "Incorrect"}
+            {result.skill_delta !== 0 && (
+              <span
+                className={`ml-auto font-mono font-bold ${
+                  result.skill_delta > 0 ? "text-emerald-400" : "text-red-400"
+                }`}
+              >
+                {result.skill_delta > 0 ? "+" : ""}
+                {result.skill_delta} ELO
+              </span>
+            )}
+          </div>
 
-      {/* Confidence slider */}
-      <div>
-        <div className="flex justify-between text-xs text-gray-500 mb-1.5">
-          <span>Confidence</span>
-          <span className="font-semibold text-gray-300">
-            {["", "Guessing", "Unsure", "Okay", "Confident", "Very sure"][confidence]}
-          </span>
-        </div>
-        <input
-          type="range"
-          min={1}
-          max={5}
-          value={confidence}
-          onChange={(e) => setConfidence(Number(e.target.value))}
-          className="w-full accent-brand-500 h-1.5 cursor-pointer"
-        />
-        <div className="flex justify-between text-xs text-gray-600 mt-0.5">
-          <span>1</span>
-          <span>2</span>
-          <span>3</span>
-          <span>4</span>
-          <span>5</span>
-        </div>
-      </div>
+          {/* Your answer */}
+          <div className="bg-gray-800/40 rounded-xl p-3 border border-gray-700/50 space-y-1">
+            <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Your answer</p>
+            <p className="text-gray-300 text-sm">{userAnswer}</p>
+          </div>
 
-      {/* Answer buttons */}
-      <div className="grid grid-cols-2 gap-3 pt-2">
-        <button
-          onClick={() => handleAnswer(false)}
-          disabled={submitting}
-          className="py-3 rounded-xl bg-red-900/40 hover:bg-red-800/50 border border-red-800/60 text-red-300 font-semibold text-sm transition-colors disabled:opacity-40"
-        >
-          ✗ Got it wrong
-        </button>
-        <button
-          onClick={() => handleAnswer(true)}
-          disabled={submitting}
-          className="py-3 rounded-xl bg-emerald-900/40 hover:bg-emerald-800/50 border border-emerald-800/60 text-emerald-300 font-semibold text-sm transition-colors disabled:opacity-40"
-        >
-          ✓ Got it right
-        </button>
-      </div>
+          {/* Correct answer */}
+          {result.correct_answer && (
+            <div className="bg-gray-800/40 rounded-xl p-3 border border-emerald-800/40 space-y-1">
+              <p className="text-xs text-emerald-500 font-medium uppercase tracking-wide">
+                Correct answer
+              </p>
+              <div className="text-gray-100 text-sm leading-relaxed">
+                <MathText text={result.correct_answer} />
+              </div>
+            </div>
+          )}
+
+          {/* Explanation */}
+          {result.explanation && (
+            <div className="bg-gray-800/40 rounded-xl p-3 border border-brand-800/40 space-y-1">
+              <p className="text-xs text-brand-400 font-medium uppercase tracking-wide">
+                Explanation
+              </p>
+              <div className="text-gray-200 text-sm leading-relaxed">
+                <MathText text={result.explanation} />
+              </div>
+            </div>
+          )}
+
+          {/* Remediation lesson */}
+          {result.remediation && (
+            <div className="bg-amber-950/30 rounded-xl p-3 border border-amber-800/40 space-y-1">
+              <p className="text-xs text-amber-400 font-medium uppercase tracking-wide">
+                📖 Lesson to review
+              </p>
+              <div className="text-gray-200 text-sm leading-relaxed">
+                <MathText text={result.remediation} />
+              </div>
+            </div>
+          )}
+
+          {/* Next question */}
+          <button
+            onClick={() => onResult(result)}
+            className="w-full py-3 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-semibold text-sm transition-colors"
+          >
+            Next Question →
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

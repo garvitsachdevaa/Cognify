@@ -169,3 +169,51 @@ Be precise. Each step must be clear and numbered."""
             "final_answer": "",
             "sympy_expr": "",
         }
+
+
+def check_answer(question_text: str, user_answer: str) -> dict:
+    """
+    Check whether a student's answer to a JEE maths question is correct.
+
+    Returns:
+        {
+            "is_correct": bool,
+            "correct_answer": str,
+            "explanation": str   # brief 1-2 sentence explanation
+        }
+    """
+    prompt = f"""You are a JEE Mathematics expert grading a student's answer.
+
+Question: {question_text}
+Student's answer: {user_answer}
+
+Evaluate whether the student's answer is mathematically correct (accept equivalent forms, e.g. "e^x(x-1)+C" and "(x-1)e^x + C" are the same).
+
+Return ONLY valid JSON with this exact structure:
+{{
+  "is_correct": true or false,
+  "correct_answer": "<the correct answer as a concise expression>",
+  "explanation": "<one or two sentences explaining why the answer is correct or what the student got wrong>"
+}}"""
+
+    try:
+        model = _get_model()
+        response = model.generate_content(prompt)
+        raw = response.text.strip()
+        if "```" in raw:
+            parts = raw.split("```")
+            raw = parts[1].strip()
+            if raw.lower().startswith("json"):
+                raw = raw[4:].strip()
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start != -1 and end > start:
+            raw = raw[start:end]
+        return json.loads(raw)
+    except Exception as e:
+        print(f"[Gemini] check_answer error: {e}")
+        return {
+            "is_correct": False,
+            "correct_answer": "",
+            "explanation": "Could not evaluate answer.",
+        }

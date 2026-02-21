@@ -13,7 +13,7 @@ from app.db import get_db
 from app.services.cms import compute_cms
 from app.services.concept_graph import get_all_concepts, load_graph
 from app.services.elo import get_or_init_skill, persist_skill, update_skill
-from app.services.gemini_client import get_embedding
+from app.services.gemini_client import get_embedding, check_answer
 from app.services.ingestion import ingest_topic
 from app.services.pinecone_client import query_questions
 from app.services.remediation import should_remediate, trigger_remediation
@@ -33,11 +33,11 @@ class PracticeStartRequest(BaseModel):
 class AnswerRequest(BaseModel):
     user_id: int
     question_id: int
-    is_correct: bool
-    time_taken: float   # seconds
+    user_answer: str        # student's typed answer
+    time_taken: float       # seconds
     retries: int = 0
     hint_used: bool = False
-    confidence: int     # 1–5
+    confidence: int = 3     # 1–5, optional (defaults to middle)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -213,6 +213,12 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
     if not question:
         raise HTTPException(status_code=404, detail=f"Question {body.question_id} not found")
 
+    # Auto-check the student's answer using Gemini
+    check = check_answer(question.get("text", ""), body.user_answer)
+    is_correct = check.get("is_correct", False)
+    correct_answer = check.get("correct_answer", "")
+    explanation = check.get("explanation", "")
+
     # Determine concept from question's first subtopic
     subtopics = question.get("subtopics") or []
     if isinstance(subtopics, str):
@@ -224,7 +230,7 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
 
     # 1. CMS
     cms = compute_cms(
-        is_correct=body.is_correct,
+        is_correct=is_correct,
         time_taken=body.time_taken,
         retries=body.retries,
         hint_used=body.hint_used,
@@ -236,7 +242,7 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
         db,
         user_id=body.user_id,
         question_id=body.question_id,
-        is_correct=body.is_correct,
+        is_correct=is_correct,
         time_taken=body.time_taken,
         retries=body.retries,
         hint_used=body.hint_used,
@@ -255,7 +261,7 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
     skill_map[concept_name] = new_skill
 
     # 5. Supermemory — write behavior note
-    status = "correct" if body.is_correct else "incorrect"
+    status = "correct" if is_correct else "incorrect"
     summary = (
         f"User {body.user_id} attempted '{concept_name}' (difficulty {difficulty}). "
         f"Result: {status}. CMS: {cms:.3f}. Skill updated: {old_skill:.0f} → {new_skill:.0f}."
@@ -263,7 +269,7 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
     write_session_summary(
         body.user_id,
         summary,
-        metadata={"concept": concept_name, "cms": str(cms), "is_correct": str(body.is_correct)},
+        metadata={"concept": concept_name, "cms": str(cms), "is_correct": str(is_correct)},
     )
 
     # 6. Remediation check
@@ -276,14 +282,17 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
         "user_id": body.user_id,
         "question_id": body.question_id,
         "concept": concept_name,
+        "is_correct": is_correct,
+        "correct_answer": correct_answer,
+        "explanation": explanation,
         "cms": cms,
         "old_skill": old_skill,
         "new_skill": new_skill,
         "skill_delta": round(new_skill - old_skill, 2),
         "remediation": remediation,
         "message": (
-            "Keep it up!" if body.is_correct
+            "Correct! Well done!" if is_correct
             else ("Remediation triggered — check the lesson below!" if remediation
-                  else "Try again — you've got this!")
+                  else "Not quite — review the explanation below.")
         ),
     }
