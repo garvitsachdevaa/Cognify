@@ -41,7 +41,10 @@ def _call_with_retry(prompt: str, max_retries: int = 3) -> str:
     for attempt in range(max_retries):
         try:
             model = _get_model()
-            response = model.generate_content(prompt)
+            response = model.generate_content(
+                prompt,
+                request_options={"timeout": 20},  # 20s hard timeout per call
+            )
             return response.text.strip()
         except Exception as e:
             if attempt == max_retries - 1:

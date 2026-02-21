@@ -1,16 +1,31 @@
 // ─── API client ────────────────────────────────────────────────────────────
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail ?? `HTTP ${res.status}`);
+async function request<T>(path: string, options?: RequestInit, timeoutMs = 30000): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body?.detail ?? `HTTP ${res.status}`);
+    }
+    return res.json() as Promise<T>;
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new Error("Request timed out — the server is taking too long. Please try again.");
+    }
+    if (e instanceof TypeError && e.message === "Failed to fetch") {
+      throw new Error("Cannot reach the server. Make sure the backend is running.");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
   }
-  return res.json() as Promise<T>;
 }
 
 // ─── Auth ──────────────────────────────────────────────────────────────────
@@ -52,7 +67,7 @@ export function startPractice(user_id: number, topic: string, n = 5) {
   return request<PracticeStartResponse>("/practice/start", {
     method: "POST",
     body: JSON.stringify({ user_id, topic, n }),
-  });
+  }, 45000); // 45s — may trigger Gemini question generation for new topics
 }
 
 export interface RemediationData {
@@ -94,7 +109,7 @@ export function submitAnswer(
       hint_used,
       confidence,
     }),
-  });
+  }, 40000); // 40s — Gemini grading
 }
 
 // ─── Doubt ────────────────────────────────────────────────────────────────

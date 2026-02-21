@@ -75,15 +75,22 @@ class AnswerRequest(BaseModel):
 _QUESTION_STARTERS = (
     "find", "evaluate", "calculate", "compute", "prove", "show", "determine",
     "if ", "let ", "for ", "given", "solve", "integrate", "differentiate",
-    "which", "what", "how", "when", "using", "without",
+    "a ", "an ", "the ", "two ", "three ", "four ", "five ",
+    "which", "what", "how", "when", "using", "without", "insert", "in a ",
+    "from ", "p(", "suppose", "consider",
 )
 
-# Phrases that indicate scraped article/document text rather than real questions
+# Phrases that ONLY appear in scraped article/document text, never in real questions
 _JUNK_PHRASES = (
-    "the document", "this document", "pdf includes", "pdf contains",
-    "questions pdf", "exam questions", "detailing various", "series of",
-    "the following questions", "includes different types", "jee main and advanced exam",
-    "practice questions for", "collection of", "set of questions",
+    "the document contains",
+    "this document contains",
+    "pdf includes",
+    "pdf contains",
+    "detailing various",
+    "includes different types of questions",
+    "jee main and advanced exams, detailing",
+    "collection of questions",
+    "set of questions",
 )
 
 def _is_valid_question(text: str) -> bool:
@@ -92,20 +99,20 @@ def _is_valid_question(text: str) -> bool:
     if not t or len(t) < 15:
         return False
     t_lower = t.lower()
-    # Reject known article/document description patterns
-    if any(t_lower.startswith(p) or p in t_lower for p in _JUNK_PHRASES):
+    # Reject known article/document description patterns (very specific phrases only)
+    if any(p in t_lower for p in _JUNK_PHRASES):
         return False
-    # Reject obviously long article text (real questions are usually < 400 chars)
+    # Reject obviously long article text (real questions are usually < 450 chars)
     if len(t) > 450:
         return False
     # Accept if it ends with "?"
     if t.endswith("?"):
         return True
-    # Accept if it starts with a known question word
+    # Accept if it starts with a known question word/pattern
     if any(t_lower.startswith(s) for s in _QUESTION_STARTERS):
         return True
     # Accept if it contains LaTeX math markers or math symbols
-    if any(marker in t for marker in ["∫", "∑", "∏", "√", "²", "³", "^", "dx", "dy", "$", "\\lim", "\\int", "\\frac"]):
+    if any(marker in t for marker in ["∫", "∑", "∏", "√", "²", "³", "^", "dx", "dy", "$", "\\lim", "\\int", "\\frac", "P("]):
         return True
     return False
 
