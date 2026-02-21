@@ -75,25 +75,37 @@ class AnswerRequest(BaseModel):
 _QUESTION_STARTERS = (
     "find", "evaluate", "calculate", "compute", "prove", "show", "determine",
     "if ", "let ", "for ", "given", "solve", "integrate", "differentiate",
-    "a ", "the ", "which", "what", "how", "when", "using", "without",
+    "which", "what", "how", "when", "using", "without",
+)
+
+# Phrases that indicate scraped article/document text rather than real questions
+_JUNK_PHRASES = (
+    "the document", "this document", "pdf includes", "pdf contains",
+    "questions pdf", "exam questions", "detailing various", "series of",
+    "the following questions", "includes different types", "jee main and advanced exam",
+    "practice questions for", "collection of", "set of questions",
 )
 
 def _is_valid_question(text: str) -> bool:
     """Return True if text looks like a real JEE math question (not scraped article text)."""
     t = text.strip()
-    if not t or len(t) < 10:
-        return False
-    # Reject obviously long article text (real questions are usually < 350 chars)
-    if len(t) > 400:
+    if not t or len(t) < 15:
         return False
     t_lower = t.lower()
-    # Accept if it ends with "?" or starts with a known question word
+    # Reject known article/document description patterns
+    if any(t_lower.startswith(p) or p in t_lower for p in _JUNK_PHRASES):
+        return False
+    # Reject obviously long article text (real questions are usually < 400 chars)
+    if len(t) > 450:
+        return False
+    # Accept if it ends with "?"
     if t.endswith("?"):
         return True
+    # Accept if it starts with a known question word
     if any(t_lower.startswith(s) for s in _QUESTION_STARTERS):
         return True
-    # Accept if it contains LaTeX-style math markers
-    if any(marker in t for marker in ["∫", "∑", "∏", "√", "²", "³", "^", "dx", "dy"]):
+    # Accept if it contains LaTeX math markers or math symbols
+    if any(marker in t for marker in ["∫", "∑", "∏", "√", "²", "³", "^", "dx", "dy", "$", "\\lim", "\\int", "\\frac"]):
         return True
     return False
 
@@ -191,6 +203,7 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
             "difficulty": int(q["difficulty"]),
         }
         for q in db_questions
+        if _is_valid_question(q["text"])  # filter junk at serve time
     ]
     result_ids = {q["id"] for q in questions}
 

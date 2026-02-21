@@ -57,6 +57,14 @@ def ingest_topic(topic: str, n: int = 10) -> list[dict]:
         text = q["text"].strip()
         if len(text) < 20:
             continue
+        # Reject article descriptions before expensive Gemini calls
+        text_lower = text.lower()
+        if any(p in text_lower for p in (
+            "the document", "this document", "pdf includes", "pdf contains",
+            "detailing various", "series of", "includes different types",
+            "jee main and advanced exam", "practice questions for",
+        )):
+            continue
 
         text_hash = hashlib.sha256(text.encode()).hexdigest()
         if text_hash in seen_hashes:
@@ -111,12 +119,22 @@ def _extract_questions_from_text(content: str, source_url: str) -> list[dict]:
     questions = []
     lines = content.split("\n")
 
-    math_indicators = ["∫", "∑", "lim", "dx", "dy", "sin", "cos", "tan",
-                       "log", "ln", "matrix", "vector", "→", "≤", "≥", "="]
+    math_indicators = ["∫", "∑", "lim(", "lim_", "dx", "dy", "sin(", "cos(", "tan(",
+                       "log(", "ln(", "matrix", "vector", "→", "≤", "≥", "$\\"]
+
+    junk_phrases = (
+        "the document", "this document", "pdf includes", "pdf contains",
+        "detailing various", "series of", "includes different types",
+        "collection of", "set of questions", "the following questions",
+    )
 
     for line in lines:
         line = line.strip()
-        if len(line) < 30 or len(line) > 500:
+        if len(line) < 30 or len(line) > 450:
+            continue
+        line_lower = line.lower()
+        # Skip article/document description sentences
+        if any(p in line_lower for p in junk_phrases):
             continue
         is_question = line.endswith("?") or any(ind in line for ind in math_indicators)
         if is_question:
