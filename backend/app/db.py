@@ -11,11 +11,20 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
 
+# Supabase (and any non-localhost Postgres) requires SSL.
+# Local Homebrew Postgres typically has no SSL — skip it there.
+_is_local = any(
+    token in settings.database_url
+    for token in ("localhost", "127.0.0.1", "::1")
+)
+_connect_args = {} if _is_local else {"sslmode": "require"}
+
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,  # auto-reconnect on stale connections
     pool_size=5,
     max_overflow=10,
+    connect_args=_connect_args,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
