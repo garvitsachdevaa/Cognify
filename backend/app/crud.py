@@ -164,11 +164,81 @@ def get_questions_by_subtopic(
             SELECT id, text, subtopics, difficulty, source_url
             FROM questions
             WHERE subtopics::text ILIKE :s
+            ORDER BY RANDOM()
             LIMIT :lim
         """),
         {"s": f"%{subtopic}%", "lim": limit},
     ).fetchall()
     return [dict(r._mapping) for r in rows]
+
+
+def get_adaptive_questions(
+    db: Session,
+    subtopic: str,
+    exclude_ids: list[int],
+    diff_min: int,
+    diff_max: int,
+    limit: int = 10,
+) -> list[dict]:
+    """
+    Adaptive fetch: filter by difficulty band, exclude already-seen questions,
+    randomise order so the same question never repeats in a row.
+    Falls back to any difficulty if the band returns nothing.
+    """
+    import json as _json
+
+    def _fetch(d_min: int, d_max: int) -> list[dict]:
+        exclude_clause = ""
+        params: dict = {"s": f"%{subtopic}%", "d_min": d_min, "d_max": d_max, "lim": limit}
+        if exclude_ids:
+            # Build a safe exclusion list
+            placeholders = ", ".join(f":ex{i}" for i in range(len(exclude_ids)))
+            exclude_clause = f"AND id NOT IN ({placeholders})"
+            for i, eid in enumerate(exclude_ids):
+                params[f"ex{i}"] = eid
+        rows = db.execute(
+            text(f"""
+                SELECT id, text, subtopics, difficulty, source_url
+                FROM questions
+                WHERE subtopics::text ILIKE :s
+                  AND difficulty BETWEEN :d_min AND :d_max
+                  {exclude_clause}
+                ORDER BY RANDOM()
+                LIMIT :lim
+            """),
+            params,
+        ).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+    results = _fetch(diff_min, diff_max)
+    # If the difficulty band is empty, widen to any difficulty
+    if not results:
+        results = _fetch(1, 5)
+    return results
+
+
+def count_questions_by_subtopic(db: Session, subtopic: str) -> int:
+    """Count how many questions we have for a subtopic (for low-stock detection)."""
+    row = db.execute(
+        text("SELECT COUNT(*) FROM questions WHERE subtopics::text ILIKE :s"),
+        {"s": f"%{subtopic}%"},
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def get_seen_question_ids(db: Session, user_id: int, subtopic: str) -> list[int]:
+    """Return IDs of questions this user has already attempted for a given subtopic."""
+    rows = db.execute(
+        text("""
+            SELECT DISTINCT a.question_id
+            FROM attempts a
+            JOIN questions q ON q.id = a.question_id
+            WHERE a.user_id = :u
+              AND q.subtopics::text ILIKE :s
+        """),
+        {"u": user_id, "s": f"%{subtopic}%"},
+    ).fetchall()
+    return [r[0] for r in rows]
 
 
 # ── Attempts ───────────────────────────────────────────────────────────────────

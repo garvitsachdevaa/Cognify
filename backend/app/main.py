@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.db import run_migrations
 from app.routers import auth, dashboard, doubt, practice
+from app.services.scheduler import start_scheduler, stop_scheduler
 
 
 @asynccontextmanager
@@ -16,8 +17,10 @@ async def lifespan(app: FastAPI):
         run_migrations()
     except Exception as e:
         print(f"[DB] Migration warning: {e}")
+    start_scheduler()
     yield
     # Shutdown
+    stop_scheduler()
     print("[Cognify] Shutting down.")
 
 

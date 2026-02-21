@@ -18,6 +18,7 @@ from app.services.ingestion import ingest_topic
 from app.services.pinecone_client import query_questions
 from app.services.remediation import should_remediate, trigger_remediation
 from app.services.supermemory import get_learner_state, write_session_summary
+import threading
 
 router = APIRouter()
 
@@ -26,8 +27,32 @@ router = APIRouter()
 
 class PracticeStartRequest(BaseModel):
     user_id: int
-    topic: str          # e.g. "integration_by_parts"
+    topic: str          # e.g. "integration_by_parts" or "adaptive"
     n: int = 5          # number of questions to serve
+
+
+# ── ELO → Difficulty band ──────────────────────────────────────────────────────
+
+# Pure weak-focus: ELO controls how hard the questions are.
+# The weaker you are, the easier the questions — build foundation first.
+_ELO_BANDS: list[tuple[float, int, int]] = [
+    # (ELO upper bound,  diff_min, diff_max)
+    (850,  1, 2),   # critical — remediation, very easy
+    (950,  2, 3),   # weak — consolidation
+    (1050, 3, 4),   # normal
+    (1150, 4, 5),   # strong
+    (9999, 5, 5),   # mastery
+]
+
+def _elo_to_difficulty(elo: float) -> tuple[int, int]:
+    for upper, d_min, d_max in _ELO_BANDS:
+        if elo < upper:
+            return d_min, d_max
+    return 5, 5
+
+
+# Low-stock threshold — trigger background ingest when unseen count drops below this
+_LOW_STOCK = 3
 
 
 class AnswerRequest(BaseModel):
@@ -104,12 +129,48 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
     # 1. Learner state from Supermemory
     learner_state = get_learner_state(body.user_id)
 
-    # 2. Skill from Postgres
+    # 2. Skill from Postgres — determines difficulty band
     concept_id = _ensure_concept(db, body.topic)
     skill = get_or_init_skill(db, body.user_id, concept_id)
+    diff_min, diff_max = _elo_to_difficulty(skill)
 
-    # 3. Always serve from Postgres first — reliable integer IDs, real JEE questions
-    db_questions = crud.get_questions_by_subtopic(db, body.topic, limit=body.n)
+    # 3. IDs the user has already seen for this topic → exclude from selection
+    seen_ids_list = crud.get_seen_question_ids(db, body.user_id, body.topic)
+    seen_ids: set[int] = set(seen_ids_list)
+
+    # 4. Low-stock check → fire background ingest so future sessions have fresh Qs
+    total_in_db = crud.count_questions_by_subtopic(db, body.topic)
+    unseen_count = total_in_db - len(seen_ids)
+    if unseen_count < _LOW_STOCK:
+        def _bg_ingest(topic: str) -> None:
+            try:
+                ingest_topic(topic, n=10)
+            except Exception as exc:
+                print(f"[BG Ingest] {topic}: {exc}")
+        threading.Thread(target=_bg_ingest, args=(body.topic,), daemon=True).start()
+
+    # 5. Adaptive DB fetch — difficulty-banded, unseen-first, randomised
+    db_questions = crud.get_adaptive_questions(
+        db,
+        subtopic=body.topic,
+        exclude_ids=seen_ids_list,
+        diff_min=diff_min,
+        diff_max=diff_max,
+        limit=body.n,
+    )
+
+    # If not enough unseen Qs, top up with already-seen ones (still randomised)
+    if len(db_questions) < body.n:
+        extra = crud.get_adaptive_questions(
+            db,
+            subtopic=body.topic,
+            exclude_ids=[q["id"] for q in db_questions],  # avoid duplicates in this batch
+            diff_min=diff_min,
+            diff_max=diff_max,
+            limit=body.n - len(db_questions),
+        )
+        db_questions.extend(extra)
+
     questions = [
         {
             "id": q["id"],
@@ -119,9 +180,9 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
         }
         for q in db_questions
     ]
-    seen_ids = {q["id"] for q in questions}
+    result_ids = {q["id"] for q in questions}
 
-    # 4. If not enough DB questions, try Pinecone (translate to DB IDs)
+    # 6. Still short? Pull from Pinecone (semantic similarity)
     if len(questions) < body.n:
         try:
             query_emb = get_embedding(body.topic.replace("_", " "))
@@ -131,7 +192,6 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
                 n=(body.n - len(questions)) * 2,
             )
             for ph in (pinecone_hits or []):
-                # Insert/lookup in DB to get a real integer ID
                 db_id = crud.insert_question(
                     db,
                     text_=ph["text"],
@@ -141,51 +201,30 @@ def start_session(body: PracticeStartRequest, db: Session = Depends(get_db)):
                     text_hash=ph["text_hash"],
                     embedding_id=ph.get("question_id", ""),
                 )
-                if db_id not in seen_ids and _is_valid_question(ph["text"]):
+                if db_id not in result_ids and _is_valid_question(ph["text"]):
                     questions.append({
                         "id": db_id,
                         "text": ph["text"],
                         "subtopics": ph.get("subtopics", [body.topic]),
                         "difficulty": int(ph.get("difficulty", 3)),
                     })
-                    seen_ids.add(db_id)
+                    result_ids.add(db_id)
                 if len(questions) >= body.n:
                     break
         except Exception as e:
             print(f"[Practice] Pinecone error: {e}")
 
-    # 5. Still not enough? Attempt web ingestion (Gemini-dependent)
-    if len(questions) < body.n:
-        try:
-            new_qs = ingest_topic(body.topic, n=body.n - len(questions))
-            for q in new_qs:
-                db_id = crud.insert_question(
-                    db,
-                    text_=q["text"],
-                    subtopics=q.get("subtopics", [body.topic]),
-                    difficulty=int(q.get("difficulty", 3)),
-                    source_url=q.get("source_url", ""),
-                    text_hash=q["text_hash"],
-                    embedding_id=q.get("question_id", ""),
-                )
-                if db_id not in seen_ids and _is_valid_question(q["text"]):
-                    questions.append({
-                        "id": db_id,
-                        "text": q["text"],
-                        "subtopics": q.get("subtopics", [body.topic]),
-                        "difficulty": int(q.get("difficulty", 3)),
-                    })
-                    seen_ids.add(db_id)
-        except Exception as e:
-            print(f"[Practice] Ingestion error: {e}")
-
     if not questions:
-        raise HTTPException(status_code=404, detail=f"No questions found for topic '{body.topic}'. Try another topic.")
+        raise HTTPException(
+            status_code=404,
+            detail=f"No questions found for topic '{body.topic}'. Try another topic."
+        )
 
     return {
         "user_id": body.user_id,
         "topic": body.topic,
         "skill": skill,
+        "difficulty_band": [diff_min, diff_max],
         "learner_state": learner_state,
         "questions": questions[:body.n],
         "questions_count": min(len(questions), body.n),
@@ -296,3 +335,47 @@ def submit_answer(body: AnswerRequest, db: Session = Depends(get_db)):
                   else "Not quite — review the explanation below.")
         ),
     }
+
+
+# ── Adaptive-start: backend picks the weakest topic automatically ──────────────
+
+class AdaptiveStartRequest(BaseModel):
+    user_id: int
+    n: int = 5
+
+
+@router.post("/adaptive-start")
+def adaptive_start(body: AdaptiveStartRequest, db: Session = Depends(get_db)):
+    """
+    Pure weak-focus session:
+      1. Load full skill vector for the user
+      2. Pick the concept with lowest ELO (unseen concepts = 1000, treated as neutral)
+      3. Delegate to the same logic as /start
+    """
+    all_concepts = get_all_concepts()
+    skill_map = crud.get_all_skills(db, body.user_id)
+
+    # Score each concept: lower ELO → higher priority
+    # Never-attempted concepts default to 1000 (neutral, not prioritised over weak ones)
+    scored = []
+    for concept in all_concepts:
+        elo = skill_map.get(concept, 1000.0)
+        scored.append((elo, concept))
+
+    scored.sort(key=lambda x: x[0])  # ascending → weakest first
+
+    # Pick the weakest concept that actually has questions in the DB
+    chosen_topic = None
+    for elo, concept in scored:
+        if crud.count_questions_by_subtopic(db, concept) > 0:
+            chosen_topic = concept
+            break
+
+    if not chosen_topic:
+        raise HTTPException(status_code=404, detail="No questions found in DB. Run seed first.")
+
+    # Reuse start_session logic
+    return start_session(
+        PracticeStartRequest(user_id=body.user_id, topic=chosen_topic, n=body.n),
+        db,
+    )
